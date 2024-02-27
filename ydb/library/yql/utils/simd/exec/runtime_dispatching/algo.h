@@ -37,8 +37,6 @@ struct Perfomancer {
         Algo() {}
 
         inline void Add(vvl& columns, vl& result) override {
-            std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-
             std::vector<Trait> Registers(columns.size());
 
             for (size_t j = 0; j < result.size(); j += Trait::SIZE / sizeof(ui64)) {
@@ -53,8 +51,6 @@ struct Perfomancer {
 
                 Registers.back().Store(&result[j]);
             }
-
-            Cerr << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count() << "ms\n";
         }
 
         ~Algo() = default;
