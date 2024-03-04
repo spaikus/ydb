@@ -9,7 +9,7 @@ struct TPerfomancer {
 
     struct TWrapWorker {
         virtual int PackTuple(bool log) = 0;
-        virtual void CmpPackTupleOrAndNaive() = 0;
+        virtual void CmpPackTupleOrAndFallback() = 0;
         virtual ~TWrapWorker() = default;
     };
 
@@ -155,28 +155,164 @@ struct TPerfomancer {
         }
 
         template <ui8 Cols>
-        static void
-        PackTupleNaiveImpl(const ui8 *const (&src_cols)[Cols],
-                          ui8 *const dst_rows, size_t size,
-                          const ui8 (&col_sizes)[Cols]) {
-            size_t tuple_total_size = 0;
+        static void PackTupleFallbackRowImpl(const ui8 *const (&src_cols)[Cols],
+                                             ui8 *const dst_rows, size_t size,
+                                             const ui8 (&col_sizes)[Cols]) {
+            size_t tuple_size = 0;
             size_t offsets[Cols];
             for (ui8 col = 0; col != Cols; ++col) {
-                offsets[col] = tuple_total_size;
-                tuple_total_size += col_sizes[col];
+                offsets[col] = tuple_size;
+                tuple_size += col_sizes[col];
             }
 
             for (size_t row = 0; row != size; ++row) {
                 for (ui8 col = 0; col != Cols; ++col) {
-                    memcpy(dst_rows + row * tuple_total_size + offsets[col],
-                           src_cols[col] + row * col_sizes[col],
-                           col_sizes[col]);
+                    switch (col_sizes[col] * 8) {
+
+#define MULTY_8x4(...)                                                         \
+    __VA_ARGS__(8);                                                            \
+    __VA_ARGS__(16);                                                           \
+    __VA_ARGS__(32);                                                           \
+    __VA_ARGS__(64)
+
+#define CASE(bits)                                                             \
+    case bits:                                                                 \
+        *reinterpret_cast<ui##bits *>(dst_rows + row * tuple_size +            \
+                                      offsets[col]) =                          \
+            *reinterpret_cast<const ui##bits *>(src_cols[col] +                \
+                                                row * (bits / 8));             \
+        break
+
+                      MULTY_8x4(CASE);
+
+#undef CASE
+#undef MULTY_8x4
+
+                    default:
+                      memcpy(dst_rows + row * tuple_size + offsets[col],
+                             src_cols[col] + row * col_sizes[col],
+                             col_sizes[col]);
+                    }
                 }
             }
         }
 
-        static TSimd<ui8>
-        BuildTuplePerm(ui8 col_size, ui8 col_pad, ui8 offset, ui8 ind) {
+        template <class ByteType>
+        static void PackTupleFallbackTypedColImpl(const ui8 *const src_col,
+                                                  ui8 *const dst_rows,
+                                                  const size_t size,
+                                                  const size_t tuple_size) {
+            static constexpr size_t BYTES = sizeof(ByteType);
+            for (size_t row = 0; row != size; ++row) {
+                *reinterpret_cast<ByteType *>(dst_rows + row * tuple_size) =
+                    *reinterpret_cast<const ByteType *>(src_col + row * BYTES);
+            }
+        }
+
+        template <ui8 Cols>
+        static void PackTupleFallbackColImpl(const ui8 *const (&src_cols)[Cols],
+                                             ui8 *const dst_rows, size_t size,
+                                             const ui8 (&col_sizes)[Cols]) {
+            size_t tuple_size = 0;
+            size_t offsets[Cols];
+            for (ui8 col = 0; col != Cols; ++col) {
+                offsets[col] = tuple_size;
+                tuple_size += col_sizes[col];
+            }
+
+            for (ui8 col = 0; col != Cols; ++col) {
+                switch (col_sizes[col] * 8) {
+
+#define MULTY_8x4(...)                                                         \
+    __VA_ARGS__(8);                                                            \
+    __VA_ARGS__(16);                                                           \
+    __VA_ARGS__(32);                                                           \
+    __VA_ARGS__(64)
+
+#define CASE(bits)                                                             \
+    case bits:                                                                 \
+        PackTupleFallbackTypedColImpl<ui##bits>(                               \
+            src_cols[col], dst_rows + offsets[col], size, tuple_size);         \
+        break
+
+                    MULTY_8x4(CASE);
+
+#undef CASE
+#undef MULTY_8x4
+
+                default:
+                    for (size_t row = 0; row != size; ++row) {
+                      memcpy(dst_rows + row * tuple_size + offsets[col],
+                             src_cols[col] + row * col_sizes[col],
+                             col_sizes[col]);
+                    }
+                }
+            }
+        }
+
+        template <ui8 Cols, ui8 Block = 16>
+        static void
+        PackTupleFallbackBlockImpl(const ui8 *const (&src_cols)[Cols],
+                                   ui8 *const dst_rows, size_t size,
+                                   const ui8 (&col_sizes)[Cols]) {
+            size_t tuple_size = 0;
+            size_t offsets[Cols];
+            for (ui8 col = 0; col != Cols; ++col) {
+                offsets[col] = tuple_size;
+                tuple_size += col_sizes[col];
+            }
+
+            const size_t block_size = size / Block;
+            for (size_t block = 0; block != block_size; ++block) {
+                for (ui8 col = 0; col != Cols; ++col) {
+                    switch (col_sizes[col] * 8) {
+
+#define BLOCK_LOOP(...)                                                        \
+    for (size_t block_i = 0; block_i != Block; ++block_i) {                    \
+        const size_t row = Block * block + block_i;                            \
+        __VA_ARGS__                                                            \
+    }
+
+#define MULTY_8x4(...)                                                         \
+    __VA_ARGS__(8);                                                            \
+    __VA_ARGS__(16);                                                           \
+    __VA_ARGS__(32);                                                           \
+    __VA_ARGS__(64)
+
+#define CASE(bits)                                                             \
+    case bits:                                                                 \
+        BLOCK_LOOP(*reinterpret_cast<ui##bits *>(dst_rows + row * tuple_size + \
+                                                 offsets[col]) =               \
+                       *reinterpret_cast<const ui##bits *>(src_cols[col] +     \
+                                                           row * (bits / 8));) \
+        break
+
+                      MULTY_8x4(CASE);
+
+#undef CASE
+#undef MULTY_8x4
+
+                    default:
+                      BLOCK_LOOP(
+                          memcpy(dst_rows + row * tuple_size + offsets[col],
+                                 src_cols[col] + row * col_sizes[col],
+                                 col_sizes[col]);)
+                    }
+                }
+            }
+
+            for (ui8 col = 0; col != Cols; ++col) {
+                [&]<size_t... Is>(std::index_sequence<Is...>) {
+                  PackTupleFallbackColImpl(
+                      {src_cols[Is] + block_size * Block * col_sizes[Is]...},
+                      dst_rows + block_size * Block * tuple_size,
+                      size - block_size * Block, col_sizes);
+                }(std::make_index_sequence<Cols>{});
+            }
+        }
+
+        static TSimd<ui8> BuildTuplePerm(ui8 col_size, ui8 col_pad, ui8 offset,
+                                         ui8 ind) {
             ui8 perm[TSimd<ui8>::SIZE];
             std::memset(perm, 0x80, TSimd<ui8>::SIZE);
 
@@ -215,28 +351,28 @@ struct TPerfomancer {
         }
 
         template <ui8 StoresPerLoad, ui8 Cols>
-        static void
-        PackTupleOrImpl(const ui8 *const (&src_cols)[Cols],
-                           ui8 *const dst_rows, size_t size, const ui8 (&col_sizes)[Cols]) {
-            // ui8 type used for sizes as a reminder, 
+        static void PackTupleOrImpl(const ui8 *const (&src_cols)[Cols],
+                                    ui8 *const dst_rows, size_t size,
+                                    const ui8 (&col_sizes)[Cols]) {
+            // ui8 type used for sizes as a reminder,
             // that tuple is small and shoud fit into one reg
-            ui8 tuple_total_size = 0;
+            ui8 tuple_size = 0;
             for (ui8 col = 0; col != Cols; ++col) {
-                tuple_total_size += col_sizes[col];
+                tuple_size += col_sizes[col];
             };
 
-            const ui8 tuples_per_store = TSimd<ui8>::SIZE / tuple_total_size;
+            const ui8 tuples_per_store = TSimd<ui8>::SIZE / tuple_size;
             ui8 col_store_sizes[Cols];
             for (ui8 col = 0; col != Cols; ++col) {
                 col_store_sizes[col] = col_sizes[col] * tuples_per_store;
             };
 
             TSimd<ui8> perms[Cols][StoresPerLoad];
-            for (ui8 col = 0, offset = 0; col != Cols; ++col) {    
+            for (ui8 col = 0, offset = 0; col != Cols; ++col) {
                 for (ui8 ind = 0; ind != StoresPerLoad; ++ind) {
-                    perms[col][ind] = BuildTuplePerm( col_sizes[col],
-                                     ui8(tuple_total_size - col_sizes[col]),
-                                    offset,  ind * col_store_sizes[col]);
+                    perms[col][ind] = BuildTuplePerm(
+                        col_sizes[col], ui8(tuple_size - col_sizes[col]),
+                        offset, ind * col_store_sizes[col]);
                 }
                 offset += col_sizes[col];
             }
@@ -248,8 +384,9 @@ struct TPerfomancer {
             std::memcpy(srcs, src_cols, sizeof(srcs));
 
             const size_t simd_iters = size / (tuples_per_store * StoresPerLoad);
-            ui8 *const end = dst_rows + simd_iters * tuples_per_store * StoresPerLoad * tuple_total_size;
-            
+            ui8 *const end = dst_rows + simd_iters * tuples_per_store *
+                                            StoresPerLoad * tuple_size;
+
             TSimd<ui8> tmp;
 
             auto dst = dst_rows;
@@ -268,17 +405,18 @@ struct TPerfomancer {
 
                     // tmp |= TupleOr(perm_regs);
                     TupleOr(perm_regs).Store(dst);
-                    dst += tuple_total_size * tuples_per_store;
+                    dst += tuple_size * tuples_per_store;
                 }
             }
 
-            PackTupleNaiveImpl(srcs, dst,
-                              size - simd_iters * tuples_per_store * StoresPerLoad, col_sizes);
+            PackTupleFallbackRowImpl(
+                srcs, dst, size - simd_iters * tuples_per_store * StoresPerLoad,
+                col_sizes);
         }
 
         template <class... Types> struct PackBenchCase {
-            static constexpr size_t Iters = 1; // value > 1 affects inlining
-            static constexpr size_t Memory = 1 << 28;
+            static constexpr size_t Iters = 2;
+            static constexpr size_t Memory = 1ul << 28;
             static constexpr size_t TupleSize = (sizeof(Types) + ...);
             static constexpr size_t Cols = sizeof...(Types);
             static constexpr size_t NTuples = Memory / TupleSize;
@@ -290,31 +428,29 @@ struct TPerfomancer {
                                         size_t, const ui8 (&)[Cols]);
 
             static constexpr std::pair<PackTupleF, const char *> Runs[] = {
-                // order affects naive (memcpy) performance
-                {&PackTupleNaiveImpl<Cols>, "naive"},
+                {&PackTupleFallbackRowImpl<Cols>, "fallback (row)"},
+                {&PackTupleFallbackColImpl<Cols>, "fallback (col)"},
+                {&PackTupleFallbackBlockImpl<Cols>, "fallback (block)"},
                 {&PackTupleOrImpl<StoresPerLoad, Cols>, "or"},
             };
 
             static void Run() {
 #define INDEXED_TYPES(...)                                                     \
-    [&]<class... ATypes, size_t... Is>(const std::tuple<ATypes...> &,          \
-                                       std::index_sequence<Is...>) {           \
+    [&]<size_t... Is>(std::index_sequence<Is...>) {                            \
       __VA_ARGS__                                                              \
-    }(std::tuple<Types...>{}, std::make_index_sequence<Cols>{})
+    }(std::make_index_sequence<Cols>{})
 
-#define INDEXED_TYPES_B                                                        \
-    [&]<class... ATypes, size_t... Is>(const std::tuple<ATypes...> &,          \
-                                       std::index_sequence<Is...>) {
+#define INDEXED_TYPES_B [&]<size_t... Is>(std::index_sequence<Is...>) {
 
 #define INDEXED_TYPES_E                                                        \
     }                                                                          \
-    (std::tuple<Types...>{}, std::make_index_sequence<Cols>{})
+    (std::make_index_sequence<Cols>{})
 
                 Cerr << "\n - cols byte alignment";
                 (..., (Cerr << ' ' << sizeof(Types)));
                 Cerr << '\n';
 
-                const ui8 col_sizes[Cols] = {sizeof(Types) ...};
+                const ui8 col_sizes[Cols] = {sizeof(Types)...};
                 size_t offsets[Cols];
                 for (ui8 col = 0, offset = 0; col != Cols; ++col) {
                     offsets[col] = offset;
@@ -322,13 +458,12 @@ struct TPerfomancer {
                 }
 
                 std::unique_ptr<ui8[]> srcs[sizeof...(Types)];
-                const ui8* src_cols[Cols];
+                const ui8 *src_cols[Cols];
 
-                INDEXED_TYPES((srcs[Is].reset(new (std::align_val_t(
-                                   32)) ui8[NTuples * sizeof(ATypes)]),
+                INDEXED_TYPES((srcs[Is].reset(new (std::align_val_t(32))
+                                                  ui8[NTuples * sizeof(Types)]),
                                ...);
-                               ((src_cols[Is] = srcs[Is].get()), ...);
-                               );
+                              ((src_cols[Is] = srcs[Is].get()), ...););
 
                 for (size_t ind = 0; ind < NTuples; ind++) {
                     INDEXED_TYPES(((reinterpret_cast<Types *>(
@@ -397,16 +532,23 @@ struct TPerfomancer {
             }
         };
 
-        void CmpPackTupleOrAndNaive() override {
-            Cerr << " --- Compare simd-or and naive copy --- \n";
+        void CmpPackTupleOrAndFallback() override {
+            Cerr << " --- Compare simd-or and fallback copy --- \n";
 
             PackBenchCase<ui64>::Run();
             PackBenchCase<ui32, ui32>::Run();
-            PackBenchCase<ui32, ui32, ui32>::Run();
-            PackBenchCase<ui32, ui32, ui32, ui32>::Run();
-            PackBenchCase<ui8, ui16, ui32>::Run();
-            PackBenchCase<ui8, ui16, ui8, ui8>::Run();
             PackBenchCase<ui16, ui16, ui16, ui16>::Run();
+            PackBenchCase<ui8, ui8, ui8, ui8, ui8, ui8, ui8, ui8>::Run();
+            PackBenchCase<ui8, ui8, ui8, ui8, ui8, ui8>::Run();
+            PackBenchCase<ui8, ui8, ui8, ui8>::Run();
+            PackBenchCase<ui32, ui32, ui32, ui32, ui32, ui32, ui32,
+                          ui32>::Run();
+            PackBenchCase<ui32, ui32, ui32, ui32, ui32, ui32>::Run();
+            PackBenchCase<ui32, ui32, ui32, ui32>::Run();
+            PackBenchCase<ui32, ui32, ui32>::Run();
+            PackBenchCase<ui64, ui64, ui64, ui64>::Run();
+            PackBenchCase<ui8, ui16, ui32>::Run();
+            PackBenchCase<ui8, ui16, ui8, ui8, ui16, ui8>::Run();
         }
 
         ~TWorker() = default;
@@ -428,7 +570,7 @@ int main() {
     bool fine = true;
     fine &= worker->PackTuple(false);
 
-    worker->CmpPackTupleOrAndNaive();
+    worker->CmpPackTupleOrAndFallback();
 
     return !fine;
 }
