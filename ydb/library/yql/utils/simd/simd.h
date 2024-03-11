@@ -145,18 +145,18 @@ struct Perfomancer {
         Algo() {}
 
         void MergeColumns(i8* result, i8* const data[4], size_t sizes[4], size_t length) override {
-            std::vector<Trait> reg(16);
-            std::vector<Trait> mask(15);
+            std::vector<Trait> reg(20);
+            std::vector<Trait> mask(19);
 
             int pack = (sizes[0] + sizes[1] + sizes[2] + sizes[3]);
             int block = Trait::SIZE / pack * pack;
 
-            PrepareMasks(sizes, mask);
+            PrepareMask(sizes, mask);
 
             //const size_t stores = std::min(4ul, Trait::SIZE / sizes[3]);
             size_t i = 0;
 
-            for (; i * sizes[0] + Trait::SIZE < length * sizes[0]; i += Trait::SIZE / pack * 2) {
+            for (; i * sizes[0] + Trait::SIZE < length * sizes[0]; i += Trait::SIZE / pack * 4) {
                 Iteration(sizes, data, result, i, pack * i, block, reg, mask);
             }
             FallbackMergeColumns(result, data, sizes, length, i);
@@ -194,14 +194,13 @@ struct Perfomancer {
             return reg;
         }
 
-        Trait CreateShuffleToBlendMask(size_t size1, size_t size2, bool shift) {
-            int packs = Trait::SIZE / (size1 + size2);
+        Trait CreateShuffleToBlendMask(size_t size1, size_t size2, size_t order, bool shift) {
             size_t cnt = 0;
-            size_t order = 0;
             i8 result[Trait::SIZE];
 
-            while (cnt < packs * (size1 + size2)) {
+            while (cnt < Trait::SIZE) {
 
+                //0000000123456700008910111200000...
                 if (shift) {
                     if (cnt % (size1 + size2) < size2) {
                         result[cnt++] = 0x80;
@@ -221,111 +220,177 @@ struct Perfomancer {
             return reg;
         }
 
-        Trait CreatePureShuffleMask(size_t size1, size_t size2) {
-
-            i8 result[Trait::SIZE];
-            size_t packs = Trait::SIZE / (size1 + size2);
-            size_t cnt = 0;
-            size_t start = packs * size1;
-
-            while (cnt < packs * size1) {
-                result[cnt++] = start++;
-            }
-
-            start = 0;
-
-            while (cnt < Trait::SIZE) {
-                result[cnt++] = start++;
-            }
-
-            Trait reg(result);
-            return reg;
-        }
         void PrepareMasks(size_t sizes[4], std::vector<Trait>& mask) {
 
-            mask[0] = CreateShuffleToBlendMask(sizes[0], sizes[1], false);
-            mask[1] = CreateShuffleToBlendMask(sizes[1], sizes[0], true);
-            mask[2] = CreateShuffleToBlendMask(sizes[2], sizes[3], false);
-            mask[3] = CreateShuffleToBlendMask(sizes[3], sizes[2], true);
-            mask[4] = CreateShuffleToBlendMask(sizes[0] + sizes[1], sizes[2] + sizes[3], false);
-            mask[5] = CreateShuffleToBlendMask(sizes[2] + sizes[3], sizes[0] + sizes[1], true);
+            int pack = sizes[0] + sizes[1] + sizes[2] + sizes[3];
 
-            mask[6] = CreateBlendMask(sizes[0], sizes[1], false);
-            mask[7] = CreateBlendMask(sizes[2], sizes[3], false);
-            mask[8] = CreateBlendMask(sizes[0] + sizes[1], sizes[2] + sizes[3], false);
+            mask[0] = CreateShuffleToBlendMask(sizes[0], sizes[1], 0, false);
+            mask[1] = CreateShuffleToBlendMask(sizes[0], sizes[1], Trait::SIZE / (sizes[0] + sizes[1]) * sizes[0], false);
 
-            mask[9] = CreatePureShuffleMask(sizes[0], sizes[1]);
-            mask[10] = CreatePureShuffleMask(sizes[1], sizes[0]);
-            mask[11] = CreatePureShuffleMask(sizes[2], sizes[3]);
-            mask[12] = CreatePureShuffleMask(sizes[3], sizes[2]);
-            mask[13] = CreatePureShuffleMask(sizes[0] + sizes[1], sizes[2] + sizes[3]);
-            mask[14] = CreatePureShuffleMask(sizes[2] + sizes[3], sizes[0] + sizes[1]);
+            mask[2] = CreateShuffleToBlendMask(sizes[1], sizes[0], 0, true);
+            mask[3] = CreateShuffleToBlendMask(sizes[1], sizes[0], Trait::SIZE / (sizes[0] + sizes[1]) * sizes[1], true);
+
+            mask[4] = CreateShuffleToBlendMask(sizes[2], sizes[3], 0, false);
+            mask[5] = CreateShuffleToBlendMask(sizes[2], sizes[3], Trait::SIZE / (sizes[2] + sizes[3]) * sizes[2], false);
+
+            mask[6] = CreateShuffleToBlendMask(sizes[3], sizes[2], 0, true);
+            mask[7] = CreateShuffleToBlendMask(sizes[3], sizes[2], Trait::SIZE / (sizes[2] + sizes[3]) * sizes[2], true);
+
+            mask[8] = CreateShuffleToBlendMask(sizes[0] + sizes[1], sizes[2] + sizes[3], 0, false);
+            mask[9] = CreateShuffleToBlendMask(sizes[0] + sizes[1], sizes[2] + sizes[3], Trait::SIZE / pack * (sizes[0] + sizes[1]), false);
+            
+            mask[10] = CreateShuffleToBlendMask(sizes[2] + sizes[3], sizes[0] + sizes[1], 0, true);
+            mask[11] = CreateShuffleToBlendMask(sizes[2] + sizes[3], sizes[0] + sizes[1], Trait::SIZE / pack * (sizes[2] + sizes[3]), true);
+
+            mask[12] = CreateBlendMask(sizes[0], sizes[1], false);
+            mask[13] = CreateBlendMask(sizes[2], sizes[3], false);
+            mask[14] = CreateBlendMask(sizes[0] + sizes[1], sizes[2] + sizes[3], false);
         }
+        Trait M1(int order, int start, size_t sizes[4]) {
+            i8 res[Trait::SIZE];
+            int pack = sizes[0] + sizes[1] + sizes[2] + sizes[3];
+            int cnt = 0;
+            int lb = 0;
+            for (int i = 0; i < order; ++i) {
+                lb += sizes[i];
+            }
+            int ub = lb + sizes[order];
+            while (cnt < Trait::SIZE) {
+                if ((cnt % pack >= lb) && (cnt % pack < ub)) {
+                    res[cnt++] = start++;
+                } else {
+                    res[cnt++] = 0x80;
+                }
+            }
+            Trait reg(res);
+            return reg;
+        }
+        void M2(size_t sizes[4], std::vector<Trait>& masks) {
+            i8 res1[Trait::SIZE];
+            i8 res2[Trait::SIZE];
+            i8 res3[Trait::SIZE];
+            int pack = sizes[0] + sizes[1] + sizes[2] + sizes[3];
+            int cnt = 0;
+            for (int i = 0; i < Trait::SIZE; ++i) {
+                res1[i] = 0xFF;
+                res2[i] = 0xFF;
+                res3[i] = 0xFF;
+            }
+            while (cnt < Trait::SIZE) {
+                if (cnt % pack < int(sizes[0])) {
+                    res1[cnt] = 0x00;
+                    res2[cnt] = 0x00;
+                    res3[cnt] = 0x00;
+                }
+                if (cnt % pack < int(sizes[0] + sizes[1])) {
+                    res2[cnt] = 0x00;
+                    res3[cnt] = 0x00;
+                }
+                if (cnt % pack < int(sizes[0] + sizes[1] + sizes[2])) {
+                    res3[cnt] = 0x00;
+                }
+                cnt++;
+            }
+            Trait r1;
+            r1.SetMask(res1);
+            Trait r2;
+            r2.SetMask(res2);
+            Trait r3;
+            r3.SetMask(res3);
+            masks[16] = r1;
+            masks[17] = r2;
+            masks[18] = r3;
+        }
+
+        void PrepareMask(size_t sizes[4], std::vector<Trait>& masks) {
+            size_t pack = sizes[0] + sizes[1] + sizes[2] + sizes[3];
+            int cnt = Trait::SIZE / pack;
+            M2(sizes, masks);
+            for (int i = 0; i < 4; ++i) {
+                for (int j = 0; j < 4; ++j) {
+                    masks[i * 4 + j] = M1(i, j * cnt * sizes[i], sizes);
+                }
+            }
+        }
+
 
         void Iteration(size_t sizes[4], i8* const data[4], i8* result, int ind, int addr, int step, std::vector<Trait>& reg, std::vector<Trait>& mask) {
-            reg[0].Get(&data[0][ind * sizes[0]]);
-            reg[1].Get(&data[1][ind * sizes[1]]);
-            reg[2].Get(&data[2][ind * sizes[2]]);
-            reg[3].Get(&data[3][ind * sizes[3]]);
+            reg[16].Get(&data[0][ind * sizes[0]]);
+            reg[17].Get(&data[1][ind * sizes[1]]);
+            reg[18].Get(&data[2][ind * sizes[2]]);
+            reg[19].Get(&data[3][ind * sizes[3]]);
+            
+            for (int i = 0; i < 16; ++i) {
+                reg[i] = reg[16 + i / 4].template Shuffle(mask[i]);
+            }
+            reg[16] = reg[0].Blend(reg[4], mask[16]);
+            reg[17] = reg[8].Blend(reg[12], mask[18]);
+            reg[18] = reg[16].Blend(reg[17], mask[17]); //ok
+            reg[0] = reg[1].Blend(reg[5], mask[16]);
+            reg[4] = reg[9].Blend(reg[13], mask[18]);
+            reg[8] = reg[0].Blend(reg[4], mask[17]); //ok
 
-            //shuffle to blend
-            reg[4] = reg[0].template Shuffle<false>(mask[0]);
-            reg[5] = reg[1].template Shuffle<false>(mask[1]);
-            reg[6] = reg[2].template Shuffle<false>(mask[2]);
-            reg[7] = reg[3].template Shuffle<false>(mask[3]);
-
-            //pure shuffle
-            reg[8] = reg[0].template Shuffle<false>(mask[9]);
-            reg[9] = reg[1].template Shuffle<false>(mask[10]);
-            reg[10] = reg[2].template Shuffle<false>(mask[11]);
-            reg[11] = reg[3].template Shuffle<false>(mask[12]);
-
-            //blend
-            //0101
-            reg[0] = reg[4].Blend(reg[5], mask[6]);
-            //2323
-            reg[1] = reg[6].Blend(reg[7], mask[7]);
-
-            //shuffle to blend
-            reg[12] = reg[8].template Shuffle<false>(mask[0]);
-            reg[13] = reg[9].template Shuffle<false>(mask[1]);
-            reg[14] = reg[10].template Shuffle<false>(mask[2]); 
-            reg[15] = reg[11].template Shuffle<false>(mask[3]);
-
-            //blend
-            //0101
-            reg[2] = reg[12].Blend(reg[13], mask[6]);
-            //2323
-            reg[3] = reg[14].Blend(reg[15], mask[7]);
-
-            reg[4] = reg[0].template Shuffle<false>(mask[4]);
-            reg[5] = reg[1].template Shuffle<false>(mask[5]);
-
-            reg[6] = reg[0].template Shuffle<false>(mask[13]);
-            reg[7] = reg[1].template Shuffle<false>(mask[14]);
-
-            reg[0] = reg[6].template Shuffle<false>(mask[4]);
-            reg[1] = reg[7].template Shuffle<false>(mask[5]);
-            reg[8] = reg[4].Blend(reg[5], mask[8]); //ok
-            reg[9] = reg[0].Blend(reg[1], mask[8]); //ok
-
-            reg[4] = reg[2].template Shuffle<false>(mask[4]);
-            reg[5] = reg[3].template Shuffle<false>(mask[5]);
-
-            reg[6] = reg[2].template Shuffle<false>(mask[13]);
-            reg[7] = reg[3].template Shuffle<false>(mask[14]);
-
-            reg[2] = reg[6].template Shuffle<false>(mask[4]);
-            reg[3] = reg[7].template Shuffle<false>(mask[5]);
-
-            reg[11] = reg[4].Blend(reg[5], mask[8]); //ok
-            reg[12] = reg[2].Blend(reg[3], mask[8]); //ok
-
-            reg[8].Store(&result[addr]);
-            reg[9].Store(&result[addr + step]);
-            reg[11].Store(&result[addr + 2 * step]);
-            reg[12].Store(&result[addr + 3 * step]);
+            reg[1] = reg[2].Blend(reg[6], mask[16]);
+            reg[5] = reg[10].Blend(reg[14], mask[18]);
+            reg[9] = reg[1].Blend(reg[5], mask[17]); //ok
+            
+            reg[2] = reg[3].Blend(reg[7], mask[16]);
+            reg[6] = reg[11].Blend(reg[15], mask[18]);
+            reg[10] = reg[2].Blend(reg[6], mask[17]); //ok
+            
+            reg[18].Store(&result[addr]);
+            reg[8].Store(&result[addr + step]);
+            reg[9].Store(&result[addr + 2 * step]);
+            reg[10].Store(&result[addr + 3 * step]);
         }
+
+
+        // void Iteration(size_t sizes[4], i8* const data[4], i8* result, int ind, int addr, int step, std::vector<Trait>& reg, std::vector<Trait>& mask) {
+        //     reg[0].Get(&data[0][ind * sizes[0]]);
+        //     reg[1].Get(&data[1][ind * sizes[1]]);
+        //     reg[2].Get(&data[2][ind * sizes[2]]);
+        //     reg[3].Get(&data[3][ind * sizes[3]]);
+
+        //     reg[4] = reg[0].template Shuffle<false>(mask[0]);
+
+        //     reg[5] = reg[0].template Shuffle<false>(mask[1]);
+
+        //     reg[6] = reg[1].template Shuffle<false>(mask[2]);
+        //     reg[7] = reg[1].template Shuffle<false>(mask[3]);
+
+        //     reg[8] = reg[2].template Shuffle<false>(mask[4]);
+        //     reg[9] = reg[2].template Shuffle<false>(mask[5]);
+
+        //     reg[10] = reg[3].template Shuffle<false>(mask[6]);
+        //     reg[11] = reg[3].template Shuffle<false>(mask[7]);
+
+        //     reg[12] = reg[4].Blend(reg[6], mask[12]);  //12121212
+        //     reg[13] = reg[5].Blend(reg[7], mask[12]);  //12121212
+        //     reg[14] = reg[8].Blend(reg[10], mask[13]); //34343434
+        //     reg[15] = reg[9].Blend(reg[11], mask[13]); //34343434
+
+        //     reg[0] = reg[12].template Shuffle<false>(mask[8]);
+        //     reg[1] = reg[12].template Shuffle<false>(mask[9]);
+
+        //     reg[2] = reg[13].template Shuffle<false>(mask[8]);
+        //     reg[3] = reg[13].template Shuffle<false>(mask[9]);
+
+        //     reg[4] = reg[14].template Shuffle<false>(mask[10]);
+        //     reg[5] = reg[14].template Shuffle<false>(mask[11]);
+
+        //     reg[6] = reg[15].template Shuffle<false>(mask[10]);
+        //     reg[7] = reg[15].template Shuffle<false>(mask[11]);
+
+        //     reg[8] = reg[0].Blend(reg[4], mask[14]);
+        //     reg[9] = reg[1].Blend(reg[5], mask[14]);
+        //     reg[10] = reg[2].Blend(reg[6], mask[14]);
+        //     reg[11] = reg[3].Blend(reg[7], mask[14]);
+
+        //     reg[8].Store(&result[addr]);
+        //     reg[9].Store(&result[addr + step]);
+        //     reg[10].Store(&result[addr + 2 * step]);
+        //     reg[12].Store(&result[addr + 3 * step]);
+        // }
 
         void MergeEnds(i8* result, i8* const data[4], size_t sizes[4], size_t length, size_t ind, int addr) {
 
