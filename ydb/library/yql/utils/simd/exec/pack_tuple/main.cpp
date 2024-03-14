@@ -1,3 +1,6 @@
+#include <random>
+#include <typeinfo>
+
 #include <util/generic/ptr.h>
 #include <util/system/cpu_id.h>
 #include <util/system/types.h>
@@ -558,11 +561,260 @@ struct TPerfomancer {
     THolder<TWrapWorker> Create() const {
         return MakeHolder<TWorker<TTraits>>();
     };
+
+    struct BinaryStats {
+        static constexpr size_t SAMPLES = 50;
+
+        size_t mean;
+        size_t std;
+    };
+
+    template <class TOffset>
+    static BinaryStats CollectBinaryStats(const TOffset *const src_offset,
+                                          const size_t length) {
+        std::mt19937 gen;
+        BinaryStats result;
+        result.mean = (src_offset[length] - src_offset[0]) / length;
+
+        uint64_t sample_sqr_sum = 0;
+        if (length <= BinaryStats::SAMPLES) {
+            const auto *end = src_offset + length;
+            for (auto *p = src_offset; p != end; ++p) {
+                const size_t len = *(p + 1) - *(p);
+                const uint64_t sample_val =
+                    len < result.mean ? result.mean - len : len - result.mean;
+                sample_sqr_sum += sample_val * sample_val;
+            }
+            sample_sqr_sum = (sample_sqr_sum + length - 1) / length;
+        } else {
+            struct {
+                size_t ind;
+                TOffset val;
+            } visited[BinaryStats::SAMPLES];
+
+            uint64_t visited_hash = 0;
+            size_t visited_num = 0;
+
+            for (size_t iter = 0; iter != BinaryStats::SAMPLES; ++iter) {
+                const size_t last = length - iter - 1;
+                const size_t ind =
+                    std::uniform_int_distribution<size_t>{0, last}(gen);
+                const uint64_t hash = 1ull << (ind % 64);
+
+                TOffset sample_val = src_offset[ind + 1] - src_offset[ind];
+
+                if (visited_hash & hash) {
+                    const auto last_it =
+                        std::find_if(visited, visited + visited_num,
+                                     [&](auto el) { return el.ind == last; });
+                    TOffset last_val;
+                    if (last_it == visited + visited_num) {
+                      last_val = src_offset[last + 1] - src_offset[last];
+                    } else {
+                      last_val = last_it->val;
+                    }
+
+                    const auto it =
+                        std::find_if(visited, visited + visited_num,
+                                     [&](auto el) { return el.ind == ind; });
+                    if (it == visited + visited_num) {
+                      it->ind = ind;
+                      ++visited_num;
+                    } else {
+                      sample_val = it->val;
+                    }
+                    it->val = last_val;
+                } else {
+                    visited[visited_num].ind = ind;
+                    visited[visited_num].val = sample_val;
+                    ++visited_num;
+                    visited_hash |= hash;
+                }
+
+                sample_val = sample_val < result.mean
+                                 ? result.mean - sample_val
+                                 : sample_val - result.mean;
+                sample_sqr_sum +=
+                    static_cast<uint64_t>(sample_val) * sample_val;
+            }
+
+            sample_sqr_sum = (sample_sqr_sum + BinaryStats::SAMPLES - 1) /
+                             BinaryStats::SAMPLES;
+        }
+        result.std = std::ceil(std::sqrt(sample_sqr_sum));
+
+        return result;
+    }
+
+    template <class TOffset, bool NullTerminated = false,
+              bool StorePrefixes = false>
+    static void PackBinaryImpl(ui8 *dst, ui8 *const dst_buffer, const ui8 *src,
+                               const TOffset *src_offsets, size_t size,
+                               size_t max_len, size_t padding) {
+        assert(max_len >= sizeof(TOffset));
+
+        TOffset dst_buf_offset = 0;
+        src += src_offsets[0];
+
+        for (size_t ind = 0; ind != size; ++ind) {
+            const TOffset bin_size = src_offsets[ind + 1] - src_offsets[ind];
+
+            *reinterpret_cast<TOffset *>(dst) = bin_size;
+            dst += sizeof(bin_size);
+
+            if (bin_size + NullTerminated <= max_len) {
+                std::memcpy(dst, src, bin_size);
+                if constexpr (NullTerminated) {
+                    dst[bin_size] = '\0';
+                }
+            } else {
+                *reinterpret_cast<TOffset *>(dst) = dst_buf_offset;
+                std::memcpy(dst_buffer + dst_buf_offset, src, bin_size);
+                dst_buf_offset += bin_size;
+
+                if constexpr (NullTerminated) {
+                    dst_buffer[dst_buf_offset] = '\0';
+                    ++dst_buf_offset;
+                }
+
+                if constexpr (StorePrefixes) {
+                    std::memcpy(dst + sizeof(TOffset), src,
+                                max_len - sizeof(TOffset));
+                }
+            }
+
+            dst += max_len + padding;
+            src += bin_size;
+        }
+    }
+
+    template <class TOffset, bool NullTerminated = false>
+    static void UnpackBinaryImpl(ui8 *dst, TOffset *const dst_offsets,
+                                 const ui8 *src, const ui8 *src_buffer,
+                                 size_t size, size_t max_len, size_t padding) {
+        assert(max_len >= sizeof(TOffset));
+
+        TOffset src_buf_offset = 0;
+        dst_offsets[0] = 0;
+
+        for (size_t ind = 0; ind != size; ++ind) {
+            const size_t bin_size = *reinterpret_cast<const TOffset *>(src);
+            src += sizeof(TOffset);
+
+            dst_offsets[ind + 1] = dst_offsets[ind] + bin_size;
+
+            if (bin_size + NullTerminated <= max_len) {
+                std::memcpy(dst, src, bin_size);
+            } else {
+                assert(*reinterpret_cast<const TOffset *>(src) ==
+                       src_buf_offset);
+                std::memcpy(dst, src_buffer + src_buf_offset, bin_size);
+                src_buf_offset += bin_size + NullTerminated;
+            }
+
+            src += max_len + padding;
+            dst += bin_size;
+        }
+    }
+
+    template <template <class T> class Distribution, auto... Args,
+              class TOffset = uint32_t>
+    static void PackBinaryTest(const char *case_name) {
+        std::mt19937 gen(1);
+        Distribution<TOffset> dist{Args...};
+
+        static constexpr size_t MEM = 1ul << 30;
+        static constexpr size_t MAXSIZ = MEM / sizeof(TOffset) - 1;
+
+        ui8 *src = new ui8[MEM];
+        std::memset(src, 2, MEM);
+
+        TOffset *src_offsets = new TOffset[MAXSIZ + 1];
+        src_offsets[0] = 0;
+
+        size_t size;
+        for (size = 0; size != MAXSIZ; ++size) {
+            const size_t str_siz = dist(gen);
+            const size_t next_offset = src_offsets[size] + str_siz;
+
+            if (next_offset > MEM) {
+                break;
+            }
+            src_offsets[size + 1] = next_offset;
+        }
+
+        const auto stats = CollectBinaryStats(src_offsets, size);
+        const size_t maxlen =
+            std::max(sizeof(TOffset), stats.mean + size_t(1. * stats.std));
+        const size_t padding = 4;
+        const size_t row_len = sizeof(TOffset) + maxlen + padding;
+
+        Cerr << "stats for: " << case_name << '\n';
+        Cerr << "µ = " << stats.mean << ", σ = " << stats.std
+             << "; len = " << maxlen << '\n';
+
+        ui8 *dst = new ui8[size * row_len];
+        std::memset(dst, 5, size * row_len);
+        ui8 *dst_buf = new ui8[MEM];
+        std::memset(dst_buf, 7, MEM);
+
+        std::chrono::steady_clock::time_point begin =
+            std::chrono::steady_clock::now();
+
+        PackBinaryImpl(dst, dst_buf, src, src_offsets, size, maxlen, padding);
+
+        std::chrono::steady_clock::time_point end =
+            std::chrono::steady_clock::now();
+
+        ui64 us =
+            std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+                .count();
+        const size_t mbs_pack =
+            (src_offsets[size] * 1000ul * 1000ul) / (us * 1024ul * 1024ul + 1);
+
+        ui8 *src_copy = new ui8[MEM];
+        std::memset(src_copy, 24, MEM);
+
+        TOffset *src_offsets_copy = new TOffset[MAXSIZ + 1];
+        std::memset(src_offsets_copy, 24, sizeof(TOffset) * MAXSIZ);
+
+        begin = std::chrono::steady_clock::now();
+
+        UnpackBinaryImpl(src_copy, src_offsets_copy, dst, dst_buf, size, maxlen,
+                         padding);
+
+        end = std::chrono::steady_clock::now();
+
+        us = std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+                 .count();
+        const size_t mbs_unpack =
+            (src_offsets[size] * 1000ul * 1000ul) / (us * 1024ul * 1024ul + 1);
+
+        const bool failed = std::memcmp(src_offsets, src_offsets_copy,
+                                        sizeof(TOffset) * (size + 1)) ||
+                            std::memcmp(src, src_copy, src_offsets[size]);
+
+        Cerr << "mb/s: " << mbs_pack << " (pack), " << mbs_unpack
+             << " (unpack), " << (failed ? "failed" : "ok") << '\n';
+
+        delete[] src;
+        delete[] src_offsets;
+        delete[] dst;
+        delete[] dst_buf;
+        delete[] src_copy;
+        delete[] src_offsets_copy;
+
+        Cerr << '\n';
+    }
 };
 
 int main() {
     if (!NX86::HaveAVX2())
         return 0;
+
+    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 8, 32>("uni(8, 32)");
+    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 16, 128>("uni(16, 128)");
+    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 32, 256>("uni(32, 256)");
 
     TPerfomancer tp;
     auto worker = tp.Create<NSimd::TSimdAVX2Traits>();
