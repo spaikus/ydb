@@ -376,7 +376,7 @@ struct TSimd8 {
         return _mm256_cmpgt_epi8(*this, other);
     }
 
-    inline TSimd8<bool> operator<(const TSimd8<T> &other) {
+    inline TSimd8<bool> operator<(const TSimd8<T> &other) const {
         return _mm256_cmpgt_epi8(other, *this);
     }
 
@@ -438,6 +438,39 @@ inline TSimd8<ui64>& TSimd8<ui64>::operator+=(const TSimd8<ui64>& other) {
 }
 
 template<>
+inline TSimd8<ui64> TSimd8<ui64>::operator-(const TSimd8<ui64>& other) const {
+    return _mm256_sub_epi64(Value, other.Value);
+}
+
+template<>
+inline TSimd8<ui64>& TSimd8<ui64>::operator-=(const TSimd8<ui64>& other) {
+    *this = *this + other.Value;
+    return *this;
+}
+
+template<>
+inline TSimd8<ui32> TSimd8<ui32>::operator-(const TSimd8<ui32>& other) const {
+    return _mm256_sub_epi32(Value, other.Value);
+}
+
+template<>
+inline TSimd8<ui32>& TSimd8<ui32>::operator-=(const TSimd8<ui32>& other) {
+    *this = *this + other.Value;
+    return *this;
+}
+
+template<>
+inline TSimd8<ui16> TSimd8<ui16>::operator-(const TSimd8<ui16>& other) const {
+    return _mm256_sub_epi32(Value, other.Value);
+}
+
+template<>
+inline TSimd8<ui16>& TSimd8<ui16>::operator-=(const TSimd8<ui16>& other) {
+    *this = *this + other.Value;
+    return *this;
+}
+
+template<>
 inline TSimd8<bool> TSimd8<bool>::Set(bool value) {
     return _mm256_set1_epi8(ui8(-value));
 }
@@ -463,10 +496,26 @@ inline TSimd8<bool> TSimd8<ui8>::operator>(const TSimd8<ui8> &other) {
 }
 
 template<>
-inline TSimd8<bool> TSimd8<ui8>::operator<(const TSimd8<ui8> &other) {
+inline TSimd8<bool> TSimd8<ui8>::operator<(const TSimd8<ui8> &other) const {
     return TSimd8<ui8>(_mm256_subs_epu8(other.Value, this->Value)).AnyBitsSet();
 }
 
+template<>
+inline TSimd8<bool> TSimd8<ui16>::operator<(const TSimd8<ui16> &other) const {
+    return TSimd8<ui8>(_mm256_subs_epu16(other.Value, this->Value)).AnyBitsSet();
+}
+
+template<>
+inline TSimd8<bool> TSimd8<ui32>::operator<(const TSimd8<ui32> &other) const {
+    // TODO: FIX
+    return _mm256_cmpgt_epi32(other.Value, this->Value);
+}
+
+template<>
+inline TSimd8<bool> TSimd8<ui64>::operator<(const TSimd8<ui64> &other) const {
+    // TODO: FIX
+    return _mm256_cmpgt_epi64(other.Value, this->Value);
+}
 
 }
 }

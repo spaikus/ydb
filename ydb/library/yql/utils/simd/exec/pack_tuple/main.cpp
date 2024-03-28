@@ -554,6 +554,331 @@ struct TPerfomancer {
             PackBenchCase<ui8, ui16, ui8, ui8, ui16, ui8>::Run();
         }
 
+        template <bool NullTerminated = false, bool StorePrefixes = false,
+                  bool Safe = false, class TOffset = ui32 *>
+        static void PackBinaryImpl(ui8 *const dst, ui8 *const dst_buffer,
+                                   const ui8 *const src,
+                                   const TOffset *const src_offsets,
+                                   const size_t size, const size_t max_len,
+                                   const size_t padding, const size_t from = 0,
+                                   size_t dst_buf_offset = 0) {
+            const size_t row_siz = sizeof(TOffset) + max_len + padding;
+
+            for (size_t ind = from; ind < size; ++ind) {
+                const TOffset bin_size =
+                    src_offsets[ind + 1] - src_offsets[ind];
+                *reinterpret_cast<TOffset *>(dst + ind * row_siz) = bin_size;
+
+                if (bin_size + NullTerminated <= max_len) {
+                    if (!Safe && bin_size <= TSimd<ui8>::SIZE &&
+                        src_offsets[size] - src_offsets[ind] >=
+                            TSimd<ui8>::SIZE) {
+                        // TODO: check load-load-blend-store for Safe option
+                        TSimd<ui8> src_reg =
+                            TSimd<ui8>::Load(src + src_offsets[ind]);
+                        src_reg.Store(dst + ind * row_siz + sizeof(TOffset));
+                    } else {
+                        std::memcpy(dst + ind * row_siz + sizeof(TOffset),
+                                    src + src_offsets[ind], bin_size);
+                    }
+
+                    if constexpr (NullTerminated) {
+                        dst[ind * row_siz + sizeof(TOffset) + bin_size] = '\0';
+                    }
+                } else {
+                    *reinterpret_cast<TOffset *>(
+                        dst + ind * row_siz + sizeof(TOffset)) = dst_buf_offset;
+                    std::memcpy(dst_buffer + dst_buf_offset,
+                                src + src_offsets[ind], bin_size);
+                    dst_buf_offset += bin_size;
+
+                    if constexpr (NullTerminated) {
+                        dst_buffer[dst_buf_offset] = '\0';
+                        ++dst_buf_offset;
+                    }
+
+                    if constexpr (StorePrefixes) {
+                        std::memcpy(dst + ind * row_siz + 2 * sizeof(TOffset),
+                                    src, max_len - sizeof(TOffset));
+                    }
+                }
+            }
+        }
+
+        template <bool NullTerminated = false, class TOffset = ui32 *>
+        static void
+        UnpackBinaryImpl(ui8 *const dst, TOffset *const dst_offsets,
+                         const ui8 *const src, const ui8 *const src_buffer,
+                         const size_t size, const size_t max_len,
+                         const size_t padding, const size_t binary_size,
+                         const size_t from = 0, TOffset src_buf_offset = 0) {
+            const size_t row_siz = sizeof(TOffset) + max_len + padding;
+            const TOffset max_offset = binary_size;
+            dst_offsets[0] = 0;
+
+            for (size_t ind = from; ind != size; ++ind) {
+                const size_t bin_size =
+                    *reinterpret_cast<const TOffset *>(src + ind * row_siz);
+
+                dst_offsets[ind + 1] = dst_offsets[ind] + bin_size;
+
+                if (bin_size + NullTerminated <= max_len) {
+                    if (bin_size <= TSimd<ui8>::SIZE &&
+                        max_offset - dst_offsets[ind] >= TSimd<ui8>::SIZE) {
+                        TSimd<ui8> src_reg = TSimd<ui8>::Load(
+                            src + ind * row_siz + sizeof(TOffset));
+                        src_reg.Store(dst + dst_offsets[ind]);
+                    } else {
+                        std::memcpy(dst + dst_offsets[ind],
+                                    src + ind * row_siz + sizeof(TOffset),
+                                    bin_size);
+                    }
+
+                } else {
+                    assert(*reinterpret_cast<const TOffset *>(
+                               src + ind * row_siz + sizeof(TOffset)) ==
+                           src_buf_offset);
+                    std::memcpy(dst + dst_offsets[ind],
+                                src_buffer + src_buf_offset, bin_size);
+                    src_buf_offset += bin_size + NullTerminated;
+                }
+            }
+        }
+
+        static TSimd<ui8> BuildBinaryPerm(size_t src_off, size_t dst_off,
+                                          const size_t len,
+                                          const size_t padding,
+                                          const auto... bin_sizes) {
+            static constexpr size_t ITERS = sizeof...(bin_sizes) + 1;
+            const size_t sizes[] = {bin_sizes..., 0};
+            const size_t row_siz = len + padding;
+
+            ui8 perm[TSimd<ui8>::SIZE];
+            std::memset(perm, 0x80, TSimd<ui8>::SIZE);
+
+            for (size_t iter = 0; iter != ITERS;
+                 src_off += sizes[iter], dst_off += row_siz, ++iter) {
+                std::iota(perm + dst_off, perm + dst_off + len, ui8(src_off));
+            }
+
+            return TSimd<ui8>{perm};
+        }
+
+        template <bool LongPadding, bool NullTerminated = false,
+                  bool StorePrefixes = false, class TOffset = ui32 *>
+        static void PackBinarySimd2Impl(ui8 *const dst, ui8 *const dst_buffer,
+                                        const ui8 *const src,
+                                        const TOffset *const src_offsets,
+                                        const size_t size, const size_t max_len,
+                                        const size_t padding) {
+            const size_t row_siz = sizeof(TOffset) + max_len + padding;
+            assert(2ul * (row_siz - LongPadding * padding) <= TSimd<ui8>::SIZE);
+
+            const auto simd_max_len = [&] {
+                constexpr size_t nums = TSimd<ui8>::SIZE / sizeof(TOffset);
+                const TOffset len = max_len - NullTerminated;
+                TOffset res[nums] = {len, len};
+                for (size_t ind = 2; ind != nums; ++ind) {
+                    // TODO: !FIX simd usnigned cmp
+                    res[ind] = static_cast<TOffset>(-1ull) / 2;
+                }
+                return TSimd<TOffset>{res};
+            }();
+
+            TOffset dst_buf_offset = 0;
+
+            TSimd<ui8> bin_perms[TSimd<ui8>::SIZE / 2ul];
+            for (size_t ind = 0; ind != TSimd<ui8>::SIZE / 2ul; ++ind) {
+                bin_perms[ind] = BuildBinaryPerm(
+                    0, sizeof(TOffset), max_len,
+                    LongPadding ? TSimd<ui8>::SIZE / 2ul - max_len
+                                : sizeof(TOffset) + padding,
+                    ind);
+            }
+            TSimd<ui8> off_perm = BuildBinaryPerm(
+                0, 0, sizeof(TOffset),
+                LongPadding ? TSimd<ui8>::SIZE / 2ul - sizeof(TOffset)
+                            : max_len + padding,
+                sizeof(TOffset));
+
+            size_t simd_size = size;
+            while (simd_size &&
+                   (src_offsets[size] - src_offsets[simd_size - 1] <
+                        TSimd<ui8>::SIZE ||
+                    (size - simd_size) * sizeof(TOffset) < TSimd<ui8>::SIZE)) {
+                --simd_size;
+            }
+
+            for (size_t ind = 0; ind < simd_size;) {
+                const TOffset bin_size =
+                    src_offsets[ind + 1] - src_offsets[ind];
+                // TODO: simd index computation
+                const auto offsets_typed =
+                    (TSimd<TOffset>(src_offsets + ind + 1) -
+                     TSimd<TOffset>(src_offsets + ind));
+                const auto offsets =
+                    reinterpret_cast<const TSimd<ui8> &>(offsets_typed)
+                        .Shuffle(off_perm);
+
+                const auto binaries = TSimd<ui8>(src + src_offsets[ind])
+                                          .Shuffle(bin_perms[bin_size]);
+                const auto row_reg = binaries | offsets;
+
+                if (LongPadding) {
+                    row_reg.Store(dst + ind * row_siz);
+                    row_reg.template ByteShift<-int(TSimd<ui8>::SIZE / 2ul)>()
+                        .Store(dst + (ind + 1) * row_siz);
+                } else {
+                    row_reg.Store(dst + ind * row_siz);
+                }
+
+                assert(src_offsets[ind + 1] - src_offsets[ind] ==
+                       *reinterpret_cast<TOffset *>(dst + ind * row_siz));
+                assert(src_offsets[ind + 2] - src_offsets[ind + 1] ==
+                       *reinterpret_cast<TOffset *>(dst + (ind + 1) * row_siz));
+
+                if ((simd_max_len < offsets_typed).Any()) {
+                    if (bin_size + NullTerminated > max_len) {
+                        *reinterpret_cast<TOffset *>(dst + ind * row_siz +
+                                                     sizeof(TOffset)) =
+                            dst_buf_offset;
+                        std::memcpy(dst_buffer + dst_buf_offset,
+                                    src + src_offsets[ind], bin_size);
+                        dst_buf_offset += bin_size;
+
+                        if constexpr (NullTerminated) {
+                            dst_buffer[dst_buf_offset] = '\0';
+                            ++dst_buf_offset;
+                        }
+
+                        if constexpr (StorePrefixes) {
+                            std::memcpy(dst + ind * row_siz +
+                                            2 * sizeof(TOffset),
+                                        src, max_len - sizeof(TOffset));
+                        }
+                    }
+
+                    ++ind;
+                } else {
+                    ind += 2;
+                }
+            }
+
+            PackBinaryImpl<NullTerminated, StorePrefixes, false>(
+                dst, dst_buffer, src, src_offsets, size, max_len, padding,
+                simd_size, dst_buf_offset);
+        }
+
+        static TSimd<ui8> BuildBinaryMask(size_t offset) {
+            ui8 mask[TSimd<ui8>::SIZE];
+            std::memset(mask, 0x00, offset);
+            std::memset(mask + offset, 0x80, TSimd<ui8>::SIZE - offset);
+            return TSimd<ui8>{mask};
+        }
+
+        template <bool NullTerminated = false, class TOffset = ui32 *>
+        static void
+        UnpackBinarySimd2Impl(ui8 *const dst, TOffset *const dst_offsets,
+                              const ui8 *const src, const ui8 *const src_buffer,
+                              const size_t size, const size_t max_len,
+                              const size_t padding, const size_t binary_size) {
+            assert(2ul * max_len <= TSimd<ui8>::SIZE);
+
+            const size_t row_siz = sizeof(TOffset) + max_len + padding;
+            const TOffset max_offset = binary_size;
+            dst_offsets[0] = 0;
+            TOffset src_buf_offset = 0;
+
+            TSimd<ui8> bin_masks[TSimd<ui8>::SIZE / 2ul + 1];
+            for (size_t ind = 0; ind != TSimd<ui8>::SIZE / 2ul + 1; ++ind) {
+                bin_masks[ind] = BuildBinaryMask(ind);
+            }
+
+            size_t simd_size = size;
+            while (simd_size &&
+                   (size - simd_size) * sizeof(TOffset) < TSimd<ui8>::SIZE) {
+                --simd_size;
+            }
+
+            size_t ind;
+            for (ind = 0; ind < simd_size;) {
+                const size_t bin_size_fst =
+                    *reinterpret_cast<const TOffset *>(src + ind * row_siz);
+                const size_t bin_size_snd = *reinterpret_cast<const TOffset *>(
+                    src + (ind + 1) * row_siz);
+
+                if (max_offset - dst_offsets[ind] < TSimd<ui8>::SIZE) {
+                    break;
+                }
+
+                dst_offsets[ind + 1] = dst_offsets[ind] + bin_size_fst;
+                dst_offsets[ind + 2] =
+                    dst_offsets[ind] + bin_size_fst + bin_size_snd;
+
+                TSimd<ui8> src_fst =
+                    TSimd<ui8>::Load(src + ind * row_siz + sizeof(TOffset));
+                TSimd<ui8> src_snd = TSimd<ui8>::Load(
+                    src + (ind + 1) * row_siz + sizeof(TOffset) - bin_size_fst);
+                src_fst.BlendVar(src_snd, bin_masks[bin_size_fst])
+                    .Store(dst + dst_offsets[ind]);
+
+                if (bin_size_fst + NullTerminated <= max_len &&
+                    bin_size_snd + NullTerminated <= max_len) {
+                    ++ind;
+
+                } else if (bin_size_fst + NullTerminated > max_len) {
+
+                    assert(*reinterpret_cast<const TOffset *>(
+                               src + ind * row_siz + sizeof(TOffset)) ==
+                           src_buf_offset);
+                    std::memcpy(dst + dst_offsets[ind],
+                                src_buffer + src_buf_offset, bin_size_fst);
+                    src_buf_offset += bin_size_fst + NullTerminated;
+                }
+                ++ind;
+            }
+
+            UnpackBinaryImpl(dst, dst_offsets, src, src_buffer, size, max_len,
+                             padding, binary_size, ind, src_buf_offset);
+        }
+
+        template <bool NullTerminated = false, bool StorePrefixes = false,
+                  bool Safe = false, class TOffset = ui32 *>
+        static void
+        PackBinary(ui8 *const dst, ui8 *const dst_buffer, const ui8 *const src,
+                   const TOffset *const src_offsets, const size_t size,
+                   const size_t max_len, const size_t padding) {
+            if (!Safe && 2ul * (sizeof(TOffset) + max_len + padding) <=
+                             TSimd<ui8>::SIZE) {
+                PackBinarySimd2Impl<false, NullTerminated, StorePrefixes>(
+                    dst, dst_buffer, src, src_offsets, size, max_len, padding);
+            } else if (!Safe &&
+                       2ul * (sizeof(TOffset) + max_len) <= TSimd<ui8>::SIZE) {
+                PackBinarySimd2Impl<true, NullTerminated, StorePrefixes>(
+                    dst, dst_buffer, src, src_offsets, size, max_len, padding);
+            } else {
+                PackBinaryImpl<NullTerminated, StorePrefixes, Safe>(
+                    dst, dst_buffer, src, src_offsets, size, max_len, padding);
+            }
+        }
+
+        template <bool NullTerminated = false, class TOffset = ui32 *>
+        static void UnpackBinary(ui8 *const dst, TOffset *const dst_offsets,
+                                 const ui8 *const src,
+                                 const ui8 *const src_buffer, const size_t size,
+                                 const size_t max_len, const size_t padding,
+                                 const size_t binary_size) {
+            if (2ul * max_len <= TSimd<ui8>::SIZE) {
+                UnpackBinarySimd2Impl<NullTerminated>(dst, dst_offsets, src,
+                                                      src_buffer, size, max_len,
+                                                      padding, binary_size);
+            } else {
+                UnpackBinaryImpl<NullTerminated>(dst, dst_offsets, src,
+                                                 src_buffer, size, max_len,
+                                                 padding, binary_size);
+            }
+        }
+
         ~TWorker() = default;
     };
 
@@ -646,84 +971,13 @@ struct TPerfomancer {
         return result;
     }
 
-    template <class TOffset, bool NullTerminated = false,
-              bool StorePrefixes = false>
-    static void PackBinaryImpl(ui8 *dst, ui8 *const dst_buffer, const ui8 *src,
-                               const TOffset *src_offsets, size_t size,
-                               size_t max_len, size_t padding) {
-        assert(max_len >= sizeof(TOffset));
-
-        TOffset dst_buf_offset = 0;
-        src += src_offsets[0];
-
-        for (size_t ind = 0; ind != size; ++ind) {
-            const TOffset bin_size = src_offsets[ind + 1] - src_offsets[ind];
-
-            *reinterpret_cast<TOffset *>(dst) = bin_size;
-            dst += sizeof(bin_size);
-
-            if (bin_size + NullTerminated <= max_len) {
-                std::memcpy(dst, src, bin_size);
-                if constexpr (NullTerminated) {
-                    dst[bin_size] = '\0';
-                }
-            } else {
-                *reinterpret_cast<TOffset *>(dst) = dst_buf_offset;
-                std::memcpy(dst_buffer + dst_buf_offset, src, bin_size);
-                dst_buf_offset += bin_size;
-
-                if constexpr (NullTerminated) {
-                    dst_buffer[dst_buf_offset] = '\0';
-                    ++dst_buf_offset;
-                }
-
-                if constexpr (StorePrefixes) {
-                    std::memcpy(dst + sizeof(TOffset), src,
-                                max_len - sizeof(TOffset));
-                }
-            }
-
-            dst += max_len + padding;
-            src += bin_size;
-        }
-    }
-
-    template <class TOffset, bool NullTerminated = false>
-    static void UnpackBinaryImpl(ui8 *dst, TOffset *const dst_offsets,
-                                 const ui8 *src, const ui8 *src_buffer,
-                                 size_t size, size_t max_len, size_t padding) {
-        assert(max_len >= sizeof(TOffset));
-
-        TOffset src_buf_offset = 0;
-        dst_offsets[0] = 0;
-
-        for (size_t ind = 0; ind != size; ++ind) {
-            const size_t bin_size = *reinterpret_cast<const TOffset *>(src);
-            src += sizeof(TOffset);
-
-            dst_offsets[ind + 1] = dst_offsets[ind] + bin_size;
-
-            if (bin_size + NullTerminated <= max_len) {
-                std::memcpy(dst, src, bin_size);
-            } else {
-                assert(*reinterpret_cast<const TOffset *>(src) ==
-                       src_buf_offset);
-                std::memcpy(dst, src_buffer + src_buf_offset, bin_size);
-                src_buf_offset += bin_size + NullTerminated;
-            }
-
-            src += max_len + padding;
-            dst += bin_size;
-        }
-    }
-
-    template <template <class T> class Distribution, auto... Args,
+    template <auto Padding, template <class T> class Distribution, auto... Args,
               class TOffset = uint32_t>
     static void PackBinaryTest(const char *case_name) {
         std::mt19937 gen(1);
         Distribution<TOffset> dist{Args...};
 
-        static constexpr size_t MEM = 1ul << 30;
+        static constexpr size_t MEM = 1ul << 25;
         static constexpr size_t MAXSIZ = MEM / sizeof(TOffset) - 1;
 
         ui8 *src = new ui8[MEM];
@@ -745,13 +999,12 @@ struct TPerfomancer {
 
         const auto stats = CollectBinaryStats(src_offsets, size);
         const size_t maxlen =
-            std::max(sizeof(TOffset), stats.mean + size_t(1. * stats.std));
-        const size_t padding = 4;
-        const size_t row_len = sizeof(TOffset) + maxlen + padding;
+            std::max(sizeof(TOffset), stats.mean + size_t(1.0 * stats.std));
+        const size_t row_len = sizeof(TOffset) + maxlen + Padding;
 
         Cerr << "stats for: " << case_name << '\n';
         Cerr << "µ = " << stats.mean << ", σ = " << stats.std
-             << "; len = " << maxlen << '\n';
+             << "; len = " << maxlen << ", pad = " << Padding << '\n';
 
         ui8 *dst = new ui8[size * row_len];
         std::memset(dst, 5, size * row_len);
@@ -761,7 +1014,8 @@ struct TPerfomancer {
         std::chrono::steady_clock::time_point begin =
             std::chrono::steady_clock::now();
 
-        PackBinaryImpl(dst, dst_buf, src, src_offsets, size, maxlen, padding);
+        TWorker<NSimd::TSimdAVX2Traits>::PackBinary(
+            dst, dst_buf, src, src_offsets, size, maxlen, Padding);
 
         std::chrono::steady_clock::time_point end =
             std::chrono::steady_clock::now();
@@ -780,8 +1034,9 @@ struct TPerfomancer {
 
         begin = std::chrono::steady_clock::now();
 
-        UnpackBinaryImpl(src_copy, src_offsets_copy, dst, dst_buf, size, maxlen,
-                         padding);
+        TWorker<NSimd::TSimdAVX2Traits>::UnpackBinary(
+            src_copy, src_offsets_copy, dst, dst_buf, size, maxlen, Padding,
+            src_offsets[size]);
 
         end = std::chrono::steady_clock::now();
 
@@ -812,17 +1067,28 @@ int main() {
     if (!NX86::HaveAVX2())
         return 0;
 
-    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 8, 32>("uni(8, 32)");
-    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 16, 128>("uni(16, 128)");
-    TPerfomancer::PackBinaryTest<std::uniform_int_distribution, 32, 256>("uni(32, 256)");
-
-    TPerfomancer tp;
-    auto worker = tp.Create<NSimd::TSimdAVX2Traits>();
+    // TPerfomancer tp;
+    // auto worker = tp.Create<NSimd::TSimdAVX2Traits>();
 
     bool fine = true;
-    fine &= worker->PackTuple(false);
+    // fine &= worker->PackTuple(false);
 
-    worker->CmpPackTupleOrAndFallback();
+    // worker->CmpPackTupleOrAndFallback();
+
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 1, 4>("uni(1, 4)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 1, 8>("uni(1, 8)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 1, 12>("uni(1, 12)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 8, 12>("uni(8, 12)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 8, 8>("uni(8, 8)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 8, 16>("uni(8, 16)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 8, 32>("uni(8, 32)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 16, 32>("uni(16, 32)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 16, 16>("uni(16, 16)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 16, 20>("uni(16, 20)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 32, 32>("uni(32, 32)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 32, 64>("uni(32, 64)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 16, 64>("uni(16, 64)");
+    TPerfomancer::PackBinaryTest<64, std::uniform_int_distribution, 32, 128>("uni(32, 128)");
 
     return !fine;
 }
