@@ -7,7 +7,6 @@
 
 #include <ydb/library/yql/minikql/arrow/arrow_defs.h>
 #include <ydb/library/yql/minikql/arrow/arrow_util.h>
-#include <ydb/library/yql/minikql/mkql_type_builder.h>
 #include <ydb/library/yql/minikql/computation/mkql_computation_node_codegen.h>  // Y_IGNORE
 #include <ydb/library/yql/minikql/mkql_node_builder.h>
 #include <ydb/library/yql/minikql/mkql_node_cast.h>
@@ -23,6 +22,9 @@
 
 #include <chrono>
 #include <numeric>
+
+#include <ydb/library/yql/minikql/mkql_type_builder.h>
+#include <ydb/library/yql/minikql/mkql_program_builder.cpp> // TODO: need for WideFromBlocks2, ValidateBlockFlowType
 
 namespace NKikimr {
 namespace NMiniKQL {
@@ -333,7 +335,7 @@ private:
                 auto array = TArrowBlock::From(*fields[i]).GetDatum().array();
 
                 Sizes_[i] = CalcMaxBlockItemSize(Types_[i]);
-                data[i] = array->template GetValues<i8>(1);
+                data[i] = const_cast<i8*>(array->template GetValues<const i8>(1));
             }
 
             // TODO: Change 4 for some N
@@ -536,11 +538,13 @@ TRuntimeNode MakeFlow(TSetup<LLVM>& setup) {
     return TRuntimeNode(callableBuilder.Build(), false);
 }
 
-TRuntimeNode TProgramBuilder::WideFromBlocks2(TRuntimeNode flow) {
+template<bool LLVM>
+TRuntimeNode WideFromBlocks2(TRuntimeNode flow, TSetup<LLVM>& setup) {
+    TProgramBuilder& pb = *setup.PgmBuilder;
     auto outputItems = ValidateBlockFlowType(flow.GetStaticType());
     outputItems.pop_back();
-    TType* outputMultiType = NewMultiType(outputItems);
-    TCallableBuilder callableBuilder(Env, "TestFromBlocks2", NewFlowType(outputMultiType));
+    TType* outputMultiType = pb.NewMultiType(outputItems);
+    TCallableBuilder callableBuilder(*setup.Env, "TestFromBlocks2", pb.NewFlowType(outputMultiType));
     callableBuilder.Add(flow);
     return TRuntimeNode(callableBuilder.Build(), false);
 }
@@ -558,7 +562,7 @@ Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
         const auto flow = MakeFlow(setup);
 
         // const auto part = pb.WideSkipBlocks(flow, pb.NewDataLiteral<ui64>(7));
-        const auto plain = pb.WideFromBlocks(flow);
+        const auto plain = WideFromBlocks2(flow, setup);
 
         const auto singleValueFlow = pb.NarrowMap(plain, [&](TRuntimeNode::TList items) -> TRuntimeNode {
             return items[0];

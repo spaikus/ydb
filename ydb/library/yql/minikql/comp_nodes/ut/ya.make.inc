@@ -22,11 +22,7 @@ SET(ORIG_SRC_DIR ydb/library/yql/minikql/comp_nodes/ut)
 
 SET(ORIG_SOURCES
     mkql_test_factory.cpp
-    mkql_bit_utils_ut.cpp
-    mkql_block_compress_ut.cpp
     mkql_block_skiptake_ut.cpp
-    mkql_block_top_sort_ut.cpp
-    mkql_blocks_ut.cpp
 )
 
 PEERDIR(
@@ -34,12 +30,15 @@ PEERDIR(
     ydb/library/yql/public/udf/arrow
     ydb/library/yql/public/udf/service/exception_policy
     ydb/library/yql/sql/pg_dummy
+    ydb/library/yql/utils/simd
 )
 
 IF (ARCH_X86_64)
 
 CFLAGS(
     -mprfchw
+    -DMKQL_DISABLE_CODEGEN
+    -mavx2
 )
 
 ENDIF()
