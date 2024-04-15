@@ -91,7 +91,7 @@ IComputationNode* WrapTestBlockFlow(TCallable& callable, const TComputationNodeF
 
     for (auto& block: blocks)
     {
-        block.resize(BLOCK_SIZE);
+        block.resize(COUNT_OF_BLOCKS);
     }
 
     for (size_t pos = 0; pos < 4; ++pos)
@@ -446,8 +446,6 @@ Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
             double calculation_time = std::chrono::duration<double>(end2 - begin2).count();
 
             return std::make_pair(prepare_time, calculation_time);
-            Cerr << "\nCalculation stage time: " << calculation_time * 1000.0 << "[ms]" << Endl;
-            Cerr << "Prepare stage time: " << prepare_time * 1000.0 << "[ms]" << Endl;
         };
 
         auto [warmup_prep_time, warmup_exec_time] = old_fromblocks_bench_run(); // warmup run
