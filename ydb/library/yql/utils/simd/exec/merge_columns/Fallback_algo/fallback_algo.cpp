@@ -2,7 +2,7 @@
 
 template <>
 THolder<NSimd::Perfomancer::Interface> NSimd::Perfomancer::Create<NSimd::FallbackTrait>() {
-    Cerr << "FallbackTrait ";
+    // Cerr << "FallbackTrait ";
     return MakeHolder<Algo<FallbackTrait>>();
 }
 

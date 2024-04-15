@@ -3,6 +3,6 @@
 
 template<>
 THolder<Perfomancer::Interface> Perfomancer::Create<SSE42Trait>() {
-    Cerr << "SSETrait ";
+    // Cerr << "SSETrait ";
     return MakeHolder<Algo<SSE42Trait>>();
 }

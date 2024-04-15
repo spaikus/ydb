@@ -4,6 +4,6 @@
 
 template<>
 THolder<NSimd::Perfomancer::Interface> NSimd::Perfomancer::Create<NSimd::AVX2Trait>() {
-    Cerr << "AVXTrait ";
+    // Cerr << "AVXTrait ";
     return MakeHolder<Algo<AVX2Trait>>();
 }

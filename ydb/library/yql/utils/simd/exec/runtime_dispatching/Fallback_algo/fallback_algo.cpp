@@ -2,6 +2,6 @@
 
 template<>
 THolder<Perfomancer::Interface> Perfomancer::Create<FallbackTrait>() {
-    Cerr << "FallbackTrait ";
+    // Cerr << "FallbackTrait ";
     return MakeHolder<Algo<FallbackTrait>>();
 }

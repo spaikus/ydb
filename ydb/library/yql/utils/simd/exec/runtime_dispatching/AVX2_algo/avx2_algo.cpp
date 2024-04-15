@@ -4,6 +4,6 @@
 
 template<>
 THolder<Perfomancer::Interface> Perfomancer::Create<AVX2Trait>() {
-    Cerr << "AVXTrait ";
+    // Cerr << "AVXTrait ";
     return MakeHolder<Algo<AVX2Trait>>();
 }

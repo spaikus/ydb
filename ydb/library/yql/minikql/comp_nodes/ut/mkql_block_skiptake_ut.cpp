@@ -31,14 +31,19 @@ namespace NMiniKQL {
 
 namespace {
 
+size_t COUNT_OF_BLOCKS  = 1'000;
+size_t BLOCK_SIZE       = 1'000; // For now 1K block_size is limit. TODO: Allocate more than one page in FromBlocks2 node
+
 class TTestBlockFlowWrapper: public TStatefulWideFlowCodegeneratorNode<TTestBlockFlowWrapper> {
 using TBaseComputation = TStatefulWideFlowCodegeneratorNode<TTestBlockFlowWrapper>;
+using TArrowBlocks = std::vector<std::vector<std::shared_ptr<arrow::ArrayData>>>;
 
 public:
-    TTestBlockFlowWrapper(TComputationMutables& mutables, size_t blockSize, size_t blockCount)
+    TTestBlockFlowWrapper(TComputationMutables& mutables, size_t blockSize, size_t blockCount, TArrowBlocks&& blocks)
         : TBaseComputation(mutables, nullptr, EValueRepresentation::Embedded)
         , BlockSize(blockSize)
         , BlockCount(blockCount)
+        , Blocks(std::move(blocks))
     {
         mutables.CurValueIndex += 6U;
     }
@@ -60,21 +65,10 @@ private:
             return EFetchResult::Finish;
         }
 
-        std::shared_ptr<arrow::ArrayData> blocks[4]{nullptr};
-        for (int pos = 0; pos < 4; ++pos)
-        {
-            arrow::UInt64Builder builder(&ctx.ArrowMemoryPool);
-            ARROW_OK(builder.Reserve(BlockSize));
-            for (size_t i = 0; i < BlockSize; ++i) {
-                builder.UnsafeAppend(pos + 1);
-            }
-            ARROW_OK(builder.FinishInternal(&blocks[pos]));
-        }
-
-        val1 = ctx.HolderFactory.CreateArrowBlock(std::move(blocks[0]));
-        val2 = ctx.HolderFactory.CreateArrowBlock(std::move(blocks[1]));
-        val3 = ctx.HolderFactory.CreateArrowBlock(std::move(blocks[2]));
-        val4 = ctx.HolderFactory.CreateArrowBlock(std::move(blocks[3]));
+        val1 = ctx.HolderFactory.CreateArrowBlock(std::move(Blocks[0][index]));
+        val2 = ctx.HolderFactory.CreateArrowBlock(std::move(Blocks[1][index]));
+        val3 = ctx.HolderFactory.CreateArrowBlock(std::move(Blocks[2][index]));
+        val4 = ctx.HolderFactory.CreateArrowBlock(std::move(Blocks[3][index]));
         val5 = ctx.HolderFactory.CreateArrowBlock(arrow::Datum(std::make_shared<arrow::UInt64Scalar>(index)));
         val6 = ctx.HolderFactory.CreateArrowBlock(arrow::Datum(std::make_shared<arrow::UInt64Scalar>(BlockSize)));
 
@@ -87,11 +81,33 @@ private:
 
     const size_t BlockSize;
     const size_t BlockCount;
+    const TArrowBlocks Blocks;
 };
 
 IComputationNode* WrapTestBlockFlow(TCallable& callable, const TComputationNodeFactoryContext& ctx) {
     MKQL_ENSURE(callable.GetInputsCount() == 0, "Expected no args");
-    return new TTestBlockFlowWrapper(ctx.Mutables, 1'00, 1'00);
+    std::vector<std::vector<std::shared_ptr<arrow::ArrayData>>> blocks(4);
+    arrow::MemoryPool* pool = arrow::default_memory_pool(); // TComputationContext not allowed here, so ise default mempool
+
+    for (auto& block: blocks)
+    {
+        block.resize(BLOCK_SIZE);
+    }
+
+    for (size_t pos = 0; pos < 4; ++pos)
+    {
+        for (size_t i = 0; i < COUNT_OF_BLOCKS; ++i)
+        {
+            arrow::UInt64Builder builder(pool);
+            ARROW_OK(builder.Reserve(BLOCK_SIZE));
+            for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+                builder.UnsafeAppend(pos + 1);
+            }
+            ARROW_OK(builder.FinishInternal(&blocks[pos][i]));
+        }
+    }
+
+    return new TTestBlockFlowWrapper(ctx.Mutables, BLOCK_SIZE, COUNT_OF_BLOCKS, std::move(blocks));
 }
 
 } // namespace
@@ -344,46 +360,105 @@ TRuntimeNode WideFromBlocks2(TRuntimeNode flow, TSetup<LLVM>& setup) {
 // -----------------------------------------------------------------------------------------------------------
 
 Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
-    Y_UNIT_TEST_LLVM(TestWideSkipBlocks) {
-        auto begin1 = std::chrono::steady_clock::now();
-        TSetup<LLVM> setup(GetNodeFactory());
-        TProgramBuilder& pb = *setup.PgmBuilder;
+    Y_UNIT_TEST_LLVM(TestSIMDFromBlocks) {
+        auto simd_fromblocks_bench_run = [] () -> std::pair<double, double> /* prepare_time, exec_time */ {
+            auto begin1 = std::chrono::steady_clock::now();
+            TSetup<LLVM> setup(GetNodeFactory());
+            TProgramBuilder& pb = *setup.PgmBuilder;
 
-        const auto ui64Type  = pb.NewDataType(NUdf::TDataType<ui64>::Id);
-        const auto tupleType = pb.NewTupleType({ui64Type, ui64Type, ui64Type, ui64Type});
-        const auto flow      = MakeFlow(setup);
-        const auto plain     = WideFromBlocks2(flow, setup);
+            const auto ui64Type  = pb.NewDataType(NUdf::TDataType<ui64>::Id);
+            const auto tupleType = pb.NewTupleType({ui64Type, ui64Type, ui64Type, ui64Type});
+            const auto flow      = MakeFlow(setup);
+            const auto plain     = WideFromBlocks2(flow, setup); // <--- use new simd node
 
-        const auto wideFlow = pb.NarrowMap(plain, [&](TRuntimeNode::TList items) -> TRuntimeNode {
-            return pb.NewTuple(tupleType, {items[0], items[1], items[2], items[3]});
-        });
+            const auto wideFlow = pb.NarrowMap(plain, [&](TRuntimeNode::TList items) -> TRuntimeNode {
+                return pb.NewTuple(tupleType, {items[0], items[1], items[2], items[3]});
+            });
 
-        const auto pgmReturn = pb.ForwardList(wideFlow);
-        const auto graph = setup.BuildGraph(pgmReturn);
+            const auto pgmReturn = pb.ForwardList(wideFlow);
+            const auto graph = setup.BuildGraph(pgmReturn);
 
-        auto end1 = std::chrono::steady_clock::now();
-        double prepare_time = std::chrono::duration<double>(end1 - begin1).count();
-        Cerr << "Prepare stage time: " << prepare_time * 1000.0 << "[ms]" << Endl;
+            auto end1 = std::chrono::steady_clock::now();
+            double prepare_time = std::chrono::duration<double>(end1 - begin1).count();
 
-        auto begin2 = std::chrono::steady_clock::now();
-        const auto iterator = graph->GetValue().GetListIterator();
-        ui64 counter{0};
-        NUdf::TUnboxedValue item;
-        while (iterator.Next(item))
-        {
-            auto first  = item.GetElement(0).Get<ui64>();
-            auto second = item.GetElement(1).Get<ui64>();
-            auto third  = item.GetElement(2).Get<ui64>();
-            auto fourth = item.GetElement(3).Get<ui64>();
+            auto begin2 = std::chrono::steady_clock::now();
+            const auto iterator = graph->GetValue().GetListIterator();
+            NUdf::TUnboxedValue item;
+            while (iterator.Next(item))
+            {
+                auto first  = item.GetElement(0).Get<ui64>();
+                auto second = item.GetElement(1).Get<ui64>();
+                auto third  = item.GetElement(2).Get<ui64>();
+                auto fourth = item.GetElement(3).Get<ui64>();
 
-            UNIT_ASSERT(first == 1 && second == 2 && third == 3 && fourth == 4);
-            ++counter;
-        }
-        auto end2 = std::chrono::steady_clock::now();
-        double calculation_time = std::chrono::duration<double>(end2 - begin2).count();
+                UNIT_ASSERT(first == 1 && second == 2 && third == 3 && fourth == 4);
+            }
+            auto end2 = std::chrono::steady_clock::now();
+            double calculation_time = std::chrono::duration<double>(end2 - begin2).count();
 
-        Cerr << "\nCalculation stage time: " << calculation_time * 1000.0 << "[ms]" << Endl;
-        Cerr << "Total rows in table: " << counter << Endl;
+            return std::make_pair(prepare_time, calculation_time);
+        };
+
+        auto [warmup_prep_time, warmup_exec_time] = simd_fromblocks_bench_run(); // warmup run
+        UNIT_ASSERT(!!warmup_prep_time && !!warmup_exec_time);
+        auto [prep_time, exec_time] = simd_fromblocks_bench_run();
+        Cerr << "\n------------------- SIMD --------------------\n";
+        Cerr << "Count of uint64_t elements: " << COUNT_OF_BLOCKS * BLOCK_SIZE * 4 /* columns */ << Endl;
+        Cerr << "Prepare stage time: " << prep_time * 1000.0 << "[ms]" << Endl;
+        Cerr << "Calculation stage time: " << exec_time * 1000.0 << "[ms]" << Endl;
+        Cerr << "Speed: " << static_cast<double>(COUNT_OF_BLOCKS * BLOCK_SIZE * 4 * 8) / (static_cast<double>(1'000'000'000) * exec_time) << "[Gb/sec]" << Endl;
+        Cerr << "\n---------------------------------------------\n";
+    }
+    Y_UNIT_TEST_LLVM(TestOldFromBlocks) {
+        auto old_fromblocks_bench_run = [] () -> std::pair<double, double> /* prepare_time, exec_time */ {
+            auto begin1 = std::chrono::steady_clock::now();
+            TSetup<LLVM> setup(GetNodeFactory());
+            TProgramBuilder& pb = *setup.PgmBuilder;
+
+            const auto ui64Type  = pb.NewDataType(NUdf::TDataType<ui64>::Id);
+            const auto tupleType = pb.NewTupleType({ui64Type, ui64Type, ui64Type, ui64Type});
+            const auto flow      = MakeFlow(setup);
+            const auto plain     = pb.WideFromBlocks(flow); // <--- use old node
+
+            const auto wideFlow = pb.NarrowMap(plain, [&](TRuntimeNode::TList items) -> TRuntimeNode {
+                return pb.NewTuple(tupleType, {items[0], items[1], items[2], items[3]});
+            });
+
+            const auto pgmReturn = pb.ForwardList(wideFlow);
+            const auto graph = setup.BuildGraph(pgmReturn);
+
+            auto end1 = std::chrono::steady_clock::now();
+            double prepare_time = std::chrono::duration<double>(end1 - begin1).count();
+
+            auto begin2 = std::chrono::steady_clock::now();
+            const auto iterator = graph->GetValue().GetListIterator();
+            NUdf::TUnboxedValue item;
+            while (iterator.Next(item))
+            {
+                auto first  = item.GetElement(0).Get<ui64>();
+                auto second = item.GetElement(1).Get<ui64>();
+                auto third  = item.GetElement(2).Get<ui64>();
+                auto fourth = item.GetElement(3).Get<ui64>();
+
+                UNIT_ASSERT(first == 1 && second == 2 && third == 3 && fourth == 4);
+            }
+            auto end2 = std::chrono::steady_clock::now();
+            double calculation_time = std::chrono::duration<double>(end2 - begin2).count();
+
+            return std::make_pair(prepare_time, calculation_time);
+            Cerr << "\nCalculation stage time: " << calculation_time * 1000.0 << "[ms]" << Endl;
+            Cerr << "Prepare stage time: " << prepare_time * 1000.0 << "[ms]" << Endl;
+        };
+
+        auto [warmup_prep_time, warmup_exec_time] = old_fromblocks_bench_run(); // warmup run
+        UNIT_ASSERT(!!warmup_prep_time && !!warmup_exec_time);
+        auto [prep_time, exec_time] = old_fromblocks_bench_run();
+        Cerr << "\n------------------- OLD --------------------\n";
+        Cerr << "Count of uint64_t elements: " << COUNT_OF_BLOCKS * BLOCK_SIZE * 4 /* columns */ << Endl;
+        Cerr << "Prepare stage time: " << prep_time * 1000.0 << "[ms]" << Endl;
+        Cerr << "Calculation stage time: " << exec_time * 1000.0 << "[ms]" << Endl;
+        Cerr << "Speed: " << static_cast<double>(COUNT_OF_BLOCKS * BLOCK_SIZE * 4 * 8) / (static_cast<double>(1'000'000'000) * exec_time) << "[Gb/sec]" << Endl;
+        Cerr << "\n--------------------------------------------\n";
     }
 }
 

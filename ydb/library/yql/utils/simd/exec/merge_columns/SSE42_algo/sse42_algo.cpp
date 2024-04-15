@@ -3,6 +3,6 @@
 
 template<>
 THolder<NSimd::Perfomancer::Interface> NSimd::Perfomancer::Create<NSimd::SSE42Trait>() {
-    Cerr << "SSETrait ";
+    // Cerr << "SSETrait ";
     return MakeHolder<Algo<SSE42Trait>>();
 }
