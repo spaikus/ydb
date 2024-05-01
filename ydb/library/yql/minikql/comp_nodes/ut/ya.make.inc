@@ -39,6 +39,8 @@ CFLAGS(
     -mprfchw
     -DMKQL_DISABLE_CODEGEN
     -mavx2
+    -g
+    -O2
 )
 
 ENDIF()

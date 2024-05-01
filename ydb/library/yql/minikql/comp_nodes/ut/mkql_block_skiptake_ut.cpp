@@ -22,6 +22,10 @@
 
 #include <chrono>
 #include <numeric>
+#include <thread>
+#include <unistd.h>
+#include <iostream>
+#include <fstream>
 
 #include <ydb/library/yql/minikql/mkql_type_builder.h>
 #include <ydb/library/yql/minikql/mkql_program_builder.cpp> // TODO: need for WideFromBlocks2, ValidateBlockFlowType
@@ -164,7 +168,7 @@ private:
             , Types_(types)
             , Values_(Types_.size() + 1U)
             , Pool_(ctx.HolderFactory.GetPagePool())
-            , Buffer_(reinterpret_cast<i8*>(Pool_.GetBlock(NKikimr::TAlignedPagePool::POOL_PAGE_SIZE)))
+            , Buffer_(reinterpret_cast<i8*>(Pool_.GetBlock(NKikimr::TAlignedPagePool::POOL_PAGE_SIZE * 10)))
         {
             Y_ASSERT(ColumnsCount_ == 4 && "More than 4 columns not supported yet");
         }
@@ -360,10 +364,16 @@ TRuntimeNode WideFromBlocks2(TRuntimeNode flow, TSetup<LLVM>& setup) {
 // -----------------------------------------------------------------------------------------------------------
 
 Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
-    Y_UNIT_TEST_LLVM(TestSIMDFromBlocks) {
+#if 1
+    Y_UNIT_TEST(TestSIMDFromBlocks) {
+        std::ofstream pidout("/home/kireev-a/study_mag/spaikus_fork/pid.txt");
+        pidout << "PID: " << ::getpid() << std::endl << std::flush;
+        Cerr << "\n------------------- SIMD --------------------" << Endl;
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(30s);
         auto simd_fromblocks_bench_run = [] () -> std::pair<double, double> /* prepare_time, exec_time */ {
             auto begin1 = std::chrono::steady_clock::now();
-            TSetup<LLVM> setup(GetNodeFactory());
+            TSetup<false> setup(GetNodeFactory());
             TProgramBuilder& pb = *setup.PgmBuilder;
 
             const auto ui64Type  = pb.NewDataType(NUdf::TDataType<ui64>::Id);
@@ -402,17 +412,24 @@ Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
         auto [warmup_prep_time, warmup_exec_time] = simd_fromblocks_bench_run(); // warmup run
         UNIT_ASSERT(!!warmup_prep_time && !!warmup_exec_time);
         auto [prep_time, exec_time] = simd_fromblocks_bench_run();
-        Cerr << "\n------------------- SIMD --------------------\n";
         Cerr << "Count of uint64_t elements: " << COUNT_OF_BLOCKS * BLOCK_SIZE * 4 /* columns */ << Endl;
         Cerr << "Prepare stage time: " << prep_time * 1000.0 << "[ms]" << Endl;
         Cerr << "Calculation stage time: " << exec_time * 1000.0 << "[ms]" << Endl;
         Cerr << "Speed: " << static_cast<double>(COUNT_OF_BLOCKS * BLOCK_SIZE * 4 * 8) / (static_cast<double>(1'000'000'000) * exec_time) << "[Gb/sec]" << Endl;
         Cerr << "\n---------------------------------------------\n";
     }
-    Y_UNIT_TEST_LLVM(TestOldFromBlocks) {
+#endif
+
+#if 0
+    Y_UNIT_TEST(TestOldFromBlocks) {
+        std::ofstream pidout("/home/kireev-a/study_mag/spaikus_fork/pid.txt");
+        pidout << "PID: " << ::getpid() << std::endl << std::flush;
+        Cerr << "\n------------------- OLD --------------------\n";
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(30s);
         auto old_fromblocks_bench_run = [] () -> std::pair<double, double> /* prepare_time, exec_time */ {
             auto begin1 = std::chrono::steady_clock::now();
-            TSetup<LLVM> setup(GetNodeFactory());
+            TSetup<false> setup(GetNodeFactory());
             TProgramBuilder& pb = *setup.PgmBuilder;
 
             const auto ui64Type  = pb.NewDataType(NUdf::TDataType<ui64>::Id);
@@ -451,13 +468,13 @@ Y_UNIT_TEST_SUITE(TMiniKQLWideTakeSkipBlocks) {
         auto [warmup_prep_time, warmup_exec_time] = old_fromblocks_bench_run(); // warmup run
         UNIT_ASSERT(!!warmup_prep_time && !!warmup_exec_time);
         auto [prep_time, exec_time] = old_fromblocks_bench_run();
-        Cerr << "\n------------------- OLD --------------------\n";
         Cerr << "Count of uint64_t elements: " << COUNT_OF_BLOCKS * BLOCK_SIZE * 4 /* columns */ << Endl;
         Cerr << "Prepare stage time: " << prep_time * 1000.0 << "[ms]" << Endl;
         Cerr << "Calculation stage time: " << exec_time * 1000.0 << "[ms]" << Endl;
         Cerr << "Speed: " << static_cast<double>(COUNT_OF_BLOCKS * BLOCK_SIZE * 4 * 8) / (static_cast<double>(1'000'000'000) * exec_time) << "[Gb/sec]" << Endl;
         Cerr << "\n--------------------------------------------\n";
     }
+#endif
 }
 
 } // namespace NMiniKQL
