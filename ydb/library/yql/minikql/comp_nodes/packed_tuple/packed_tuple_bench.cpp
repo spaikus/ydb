@@ -31,6 +31,13 @@ static void escape(void* p) {
 }
 
 class Benchmarker {
+private:
+    struct BenchData {
+        std::vector<ui8>                valid_bitmask; // always 111...111
+        std::vector<std::vector<ui8>>   columns;
+        std::vector<ui8>                is_variable;
+    };
+
 public:
     enum class ConverterType {
         AVX2,
@@ -38,36 +45,18 @@ public:
         Fallback
     };
 
-public:
-    Benchmarker(const std::vector<TColumnDesc>& column_descs, ConverterType type = ConverterType::Fallback)
-        : col_descs_(column_descs) 
-    {
-        if (type == ConverterType::AVX2 && NX86::HaveAVX2()) {
-            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdAVX2Traits>>(column_descs);
-        } else if (type == ConverterType::SSE42 && NX86::HaveSSE42()) {
-            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdSSE42Traits>>(column_descs);
-        } else {
-            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdFallbackTraits>>(column_descs);
-        }
-    }
-
-    void BenchPack(ui32 rows_count) {
-        ui64 total_size = rows_count * converter_->TotalRowSize;
-        ui32 columns_num = converter_->Columns.size();
-
-        std::vector<std::vector<ui8>>   inputs;
-        std::vector<ui8*>               column_ptrs;
+private:
+    BenchData GenerateData(ui32 rows_count) {
+        std::vector<std::vector<ui8>>   columns;
         std::vector<ui8>                shared_valid_bitmask((rows_count + 7) / 8, ~0);
-        std::vector<ui8*>               is_valid_bitmask_ptrs;
+        std::vector<ui8>                is_variable;
         
         for (const auto& col: converter_->OrigColumns) {
             if (col.SizeType == EColumnSizeType::Fixed) {
                 std::vector<ui8> data(col.DataSize * rows_count, 0);
                 std::generate(data.begin(), data.end(), rbe_);
-
-                inputs.emplace_back(std::move(data));
-                column_ptrs.emplace_back(inputs.back().data());
-                is_valid_bitmask_ptrs.push_back(shared_valid_bitmask.data());
+                columns.emplace_back(std::move(data));
+                is_variable.emplace_back(false);
             } else {
                 std::vector<ui32> data_offsets(1, 0);
                 ui32 data_size = 0;
@@ -89,13 +78,51 @@ public:
                 std::vector<ui8> byte_data_offsets(data_offsets.size() * sizeof(ui32));
                 std::memcpy(byte_data_offsets.data(), data_offsets.data(), byte_data_offsets.size());
 
-                inputs.emplace_back(std::move(byte_data_offsets));
-                column_ptrs.emplace_back(inputs.back().data());
-                is_valid_bitmask_ptrs.push_back(shared_valid_bitmask.data());
+                columns.emplace_back(std::move(byte_data_offsets));
+                is_variable.emplace_back(true);
+                columns.emplace_back(std::move(data));
+                is_variable.emplace_back(false);
+            }
+        }
 
-                inputs.emplace_back(std::move(data));
-                column_ptrs.emplace_back(inputs.back().data());
+        return {std::move(shared_valid_bitmask), std::move(columns), std::move(is_variable)};
+    }
+
+public:
+    Benchmarker(const std::vector<TColumnDesc>& column_descs, ConverterType type = ConverterType::Fallback)
+        : col_descs_(column_descs) 
+    {
+        if (type == ConverterType::AVX2 && NX86::HaveAVX2()) {
+            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdAVX2Traits>>(column_descs);
+        } else if (type == ConverterType::SSE42 && NX86::HaveSSE42()) {
+            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdSSE42Traits>>(column_descs);
+        } else {
+            converter_ = MakeHolder<TTupleLayoutFallback<NSimd::TSimdFallbackTraits>>(column_descs);
+        }
+    }
+
+    void BenchPack(ui32 rows_count) {
+        ui64 total_size = rows_count * converter_->TotalRowSize;
+        ui32 columns_num = converter_->Columns.size();
+
+        auto bench_data = GenerateData(rows_count);
+
+        std::vector<ui8*>   column_ptrs;
+        std::vector<ui8*>   is_valid_bitmask_ptrs;
+        
+        size_t i = 0;
+        for (; i < bench_data.columns.size();) {
+            if (!bench_data.is_variable[i]) {
+                column_ptrs.push_back(bench_data.columns[i].data());
+                is_valid_bitmask_ptrs.push_back(bench_data.valid_bitmask.data());
+                ++i;
+            } else {
+                column_ptrs.push_back(bench_data.columns[i].data());
+                is_valid_bitmask_ptrs.push_back(bench_data.valid_bitmask.data());
+                ++i;
+                column_ptrs.push_back(bench_data.columns[i].data());
                 is_valid_bitmask_ptrs.push_back(nullptr);
+                ++i;
             }
         }
 
@@ -134,11 +161,66 @@ public:
         CTEST << "----------------------------------------------" << Endl << Endl;
     }
 
-// Not implemented yet
-#if 0
     void BenchUnpack(ui32 rows_count) {
+        ui64 total_size = rows_count * converter_->TotalRowSize;
+        ui32 columns_num = converter_->Columns.size();
+
+        auto bench_data = GenerateData(rows_count);
+
+        std::vector<ui8*>   column_ptrs;
+        std::vector<ui8*>   is_valid_bitmask_ptrs;
+        
+        size_t i = 0;
+        for (; i < bench_data.columns.size();) {
+            if (!bench_data.is_variable[i]) {
+                column_ptrs.push_back(bench_data.columns[i].data());
+                is_valid_bitmask_ptrs.push_back(bench_data.valid_bitmask.data());
+                ++i;
+            } else {
+                column_ptrs.push_back(bench_data.columns[i].data());
+                is_valid_bitmask_ptrs.push_back(bench_data.valid_bitmask.data());
+                ++i;
+                column_ptrs.push_back(bench_data.columns[i].data());
+                is_valid_bitmask_ptrs.push_back(nullptr);
+                ++i;
+            }
+        }
+
+        std::vector<ui8>                        res(total_size + 64, 0);
+        std::vector<ui8, TMKQLAllocator<ui8>>   overflow;
+
+        const ui8** columns = const_cast<const ui8**>(column_ptrs.data());
+        const ui8** isValidBitmask = const_cast<const ui8**>(is_valid_bitmask_ptrs.data());
+        converter_->Pack(columns, isValidBitmask, res.data(), overflow, 0, rows_count);
+
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+        converter_->Unpack(const_cast<ui8**>(columns), const_cast<ui8**>(isValidBitmask), res.data(), overflow, 0, rows_count);
+        escape(const_cast<ui8**>(columns));
+        escape(const_cast<ui8**>(isValidBitmask));
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        ui64 microseconds = std::max<ui64>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count(), 1);
+
+        auto calc_size = [&total_size] () -> std::pair<double, const char*> {
+            if (total_size > 1024 * 1024 * 1024) {
+                return {static_cast<double>(total_size) / (1024 * 1024 * 1024), " [GB]"};
+            } else if (total_size > 1024 * 1024) {
+                return {static_cast<double>(total_size) / (1024 * 1024), " [MB]"};
+            } else {
+                return {static_cast<double>(total_size) / 1024, " [KB]"};
+            }
+        };
+        auto [trunc_total_size, suffix] = calc_size();
+
+        CTEST << "------------- Benchmark for Unpack -------------" << Endl;
+        CTEST << "Layout: { key columns count = " << converter_->KeyColumns.size()
+              << ", payload columns count = " << converter_->PayloadColumns.size() << " }" << Endl;
+        CTEST << "Count of columns = " << columns_num << Endl;
+        CTEST << "Count of rows = " << rows_count << Endl;
+        CTEST << "TotalRowSize = " << converter_->TotalRowSize << Endl;
+        CTEST << "Data size = " << trunc_total_size << suffix << Endl;
+        CTEST << "Calculating speed = " << total_size / microseconds << "MB/sec" << Endl;
+        CTEST << "----------------------------------------------" << Endl << Endl;
     }
-#endif
 
 private:
     std::vector<TColumnDesc>    col_descs_;
@@ -159,7 +241,7 @@ void PrintType(Benchmarker::ConverterType type) {
 
 Y_UNIT_TEST_SUITE(BenchConversion) {
 
-#if 0
+#if 1
 Y_UNIT_TEST(BenchPackFixed) {
 
     std::mt19937 rng;
@@ -203,7 +285,9 @@ Y_UNIT_TEST(BenchPackFixed) {
 } // Y_UNIT_TEST(BenchPackFixed)
 #endif
 
+#if 0
 Y_UNIT_TEST(BenchPackVariable) {
+
     TScopedAlloc alloc(__LOCATION__);
     double key_cols_mult = 0.10; // 10% of cols are keys
 
@@ -245,12 +329,96 @@ Y_UNIT_TEST(BenchPackVariable) {
     UNIT_ASSERT(true);
 
 } // Y_UNIT_TEST(BenchPackVariable)
+#endif
 
-#if 0 // Unpack not implemented yet
-Y_UNIT_TEST(BenchUnpack) {
+#if 0
+Y_UNIT_TEST(BenchUnpackFixed) {
+
+    std::mt19937 rng;
+    ui64 sizes[4] = {1, 2, 4, 8};
+    double key_cols_mult = 0.10; // 10% of cols are keys
+
+    for (auto converter_type: {Benchmarker::ConverterType::Fallback, Benchmarker::ConverterType::SSE42, Benchmarker::ConverterType::AVX2}) {
+        Cerr << "--------------------------------------------------" << Endl;
+        PrintType(converter_type);
+        for (ui64 cols_count: {8, 32, 128}) {
+            for (ui64 rows_count: {10'000, 100'000, 1'000'000, 10'000'000}) {
+                if (cols_count * rows_count > 1e9) {
+                    continue; // too large dataset
+                }
+                ui64 key_cols_count = std::max<ui64>(static_cast<ui64>(key_cols_mult * cols_count), 1);
+                ui64 payload_cols_count = cols_count - key_cols_count;
+                std::vector<TColumnDesc> columns;
+
+                for (ui64 i = 0; i < key_cols_count; ++i) {
+                    columns.emplace_back();
+                    columns.back().Role = EColumnRole::Key;
+                    columns.back().DataSize = sizes[rng() % 4];
+                    columns.back().SizeType = EColumnSizeType::Fixed;
+                }
+
+                for (ui64 i = 0; i < payload_cols_count; ++i) {
+                    columns.emplace_back();
+                    columns.back().Role = EColumnRole::Payload;
+                    columns.back().DataSize = sizes[rng() % 4];
+                    columns.back().SizeType = EColumnSizeType::Fixed;
+                }
+
+                Benchmarker bench(columns, converter_type);
+                bench.BenchUnpack(rows_count);
+            }
+        }
+    }
 
     UNIT_ASSERT(true);
-} // Y_UNIT_TEST(BenchUnpack)
+
+} // Y_UNIT_TEST(BenchUnpackFixed)
+#endif
+
+#if 0
+Y_UNIT_TEST(BenchUnpackVariable) {
+
+    TScopedAlloc alloc(__LOCATION__);
+    double key_cols_mult = 0.10; // 10% of cols are keys
+
+    for (auto converter_type: {Benchmarker::ConverterType::Fallback, Benchmarker::ConverterType::SSE42, Benchmarker::ConverterType::AVX2}) {
+        for (ui64 seq_byte_size: {8, 32, 128}) {
+            Cerr << "--------------------------------------------------" << Endl;
+            PrintType(converter_type);
+            Cerr << "Variable sequence size: " << seq_byte_size << Endl;
+            for (ui64 cols_count: {8, 32, 128}) {
+                for (ui64 rows_count: {10'000, 100'000, 1'000'000}) {
+                    if (cols_count * rows_count * seq_byte_size > 1e8) {
+                        continue; // too large dataset
+                    }
+                    ui64 key_cols_count = std::max<ui64>(static_cast<ui64>(key_cols_mult * cols_count), 1);
+                    ui64 payload_cols_count = cols_count - key_cols_count;
+                    std::vector<TColumnDesc> columns;
+
+                    for (ui64 i = 0; i < key_cols_count; ++i) {
+                        columns.emplace_back();
+                        columns.back().Role = EColumnRole::Key;
+                        columns.back().DataSize = seq_byte_size;
+                        columns.back().SizeType = EColumnSizeType::Variable;
+                    }
+
+                    for (ui64 i = 0; i < payload_cols_count; ++i) {
+                        columns.emplace_back();
+                        columns.back().Role = EColumnRole::Payload;
+                        columns.back().DataSize = seq_byte_size;
+                        columns.back().SizeType = EColumnSizeType::Variable;
+                    }
+
+                    Benchmarker bench(columns, converter_type);
+                    bench.BenchUnpack(rows_count);
+                }
+            }
+        }
+    }
+
+    UNIT_ASSERT(true);
+
+} // Y_UNIT_TEST_SUITE(BenchUnpackVariable)
 #endif
 
 } // Y_UNIT_TEST_SUITE(BenchConversion)

@@ -62,7 +62,7 @@ struct TTupleLayout {
     virtual void Pack(const ui8** columns, const ui8** isValidBitmask, ui8* res, std::vector<ui8, TMKQLAllocator<ui8>>& overflow, ui32 start, ui32 count) const = 0;
 
     // Takes packed rows,
-    // outputs array of pointer to columns, array of validity bitmaps 
+    // outputs array of pointer to columns, array of validity bitmaps
     virtual void Unpack(ui8** columns, ui8** isValidBitmask, const ui8* res, const std::vector<ui8, TMKQLAllocator<ui8>>& overflow, ui32 start, ui32 count) const = 0;
 };
 

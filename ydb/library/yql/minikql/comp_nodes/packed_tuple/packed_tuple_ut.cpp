@@ -315,7 +315,7 @@ Y_UNIT_TEST(PackVarSize) {
     std::vector<ui32> col2(NTuples1, 0);
     std::vector<ui64> col3(NTuples1, 0);
     std::vector<ui32> col4(NTuples1, 0);
-    
+
     std::vector<ui32> vcol1(1, 0);
     
     std::vector<ui8> vcol1data;
@@ -362,7 +362,7 @@ Y_UNIT_TEST(PackVarSize) {
     cols[5] = (ui8*) vcol2data.data();
     cols[6] = (ui8*) col3.data();
     cols[7] = (ui8*) col4.data();
- 
+
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     std::vector<ui8> colValid((NTuples1 + 7)/8, ~0);
     const ui8 *colsValid[8] = {
@@ -485,7 +485,7 @@ Y_UNIT_TEST(UnpackVarSize) {
     std::vector<ui32> col2(NTuples1, 0);
     std::vector<ui64> col3(NTuples1, 0);
     std::vector<ui32> col4(NTuples1, 0);
-    
+
     std::vector<ui32> vcol1(1, 0);
     std::vector<ui8> vcol1data;
     std::vector<ui32> vcol2(1, 0);
@@ -531,7 +531,7 @@ Y_UNIT_TEST(UnpackVarSize) {
     cols[5] = (ui8*) vcol2data.data();
     cols[6] = (ui8*) col3.data();
     cols[7] = (ui8*) col4.data();
- 
+
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     std::vector<ui8> colValid((NTuples1 + 7)/8, ~0);
     const ui8 *colsValid[8] = {
@@ -551,7 +551,7 @@ Y_UNIT_TEST(UnpackVarSize) {
     std::vector<ui32> col2_new(NTuples1, 0);
     std::vector<ui64> col3_new(NTuples1, 0);
     std::vector<ui32> col4_new(NTuples1, 0);
-    
+
     std::vector<ui32> vcol1_new(NTuples1 + 1, 0);
     std::vector<ui8>  vcol1data_new(vcol1data.size());
     std::vector<ui32> vcol2_new(NTuples1 + 1, 0);
