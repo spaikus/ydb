@@ -105,7 +105,6 @@ template <typename TTrait> struct TTupleLayoutFallback : public TTupleLayout {
         ui8 Cols;
         size_t PermMaskOffset;
         size_t RowOffset;
-        size_t TupleSize;
         size_t TuplesPerStore; // Tuples number in one register
     };
     std::vector<SIMDDesc> SIMDBlock_;       // SIMD iterations description

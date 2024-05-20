@@ -331,8 +331,6 @@ template <class TTraits> struct SIMDPack {
             std::max(1ul, TSimd<ui8>::SIZE / tuple_size);
         const size_t simd_iters =
             (size ? size - 1 : 0) / (tuples_per_store * StoresPerLoad);
-        ui8 *const end = dst_rows + simd_iters * tuples_per_store *
-                                        StoresPerLoad * tuple_size;
 
         TSimd<ui8> src_regs[Cols];
         TSimd<ui8> perm_regs[Cols];
@@ -343,7 +341,9 @@ template <class TTraits> struct SIMDPack {
             srcs[col] += col_sizes[col] * start;
         }
 
-        auto dst = dst_rows + tuple_size * start;
+        auto dst = dst_rows;
+        ui8 *const end = dst_rows + simd_iters * tuples_per_store *
+                                        StoresPerLoad * tuple_size;
         while (dst != end) {
             for (ui8 col = 0; col != Cols; ++col) {
                 src_regs[col] = TSimd<ui8>(srcs[col]);
