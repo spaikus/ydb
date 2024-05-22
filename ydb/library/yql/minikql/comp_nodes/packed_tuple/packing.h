@@ -4,6 +4,7 @@ namespace NKikimr {
 namespace NMiniKQL {
 namespace NPackedTuple {
 
+[[maybe_unused]]
 static void
 PackTupleFallbackRowImpl(const ui8 *const src_cols[], ui8 *const dst_rows,
                          const size_t cols, const size_t size,
@@ -315,6 +316,8 @@ template <class TTraits> struct SIMDPack {
         return TupleOrImpl<Left>(vec) | TupleOrImpl<Right>(vec + Left);
     }
 
+    template <> TSimd<ui8> TupleOrImpl<0>(TSimd<ui8> []) { std::abort(); }
+
     template <> TSimd<ui8> TupleOrImpl<1>(TSimd<ui8> vec[]) { return vec[0]; }
 
     template <> TSimd<ui8> TupleOrImpl<2>(TSimd<ui8> vec[]) {
@@ -372,46 +375,25 @@ template <class TTraits> struct SIMDPack {
     template <ui8 LoadsPerStore, ui8 Cols>
     static void UnpackTupleOrImpl(const ui8 *const src_rows,
                                   ui8 *const dst_cols[], size_t size,
-                                  const size_t col_sizes[],
-                                  const size_t padding) {
-        // ui8 type used for sizes as a reminder,
-        // that tuple is small and shoud fit into one reg
-        size_t tuple_size = 0;
-        for (ui8 col = 0; col != Cols; ++col) {
-            tuple_size += col_sizes[col];
-        };
-        assert(tuple_size <= TSimd<ui8>::SIZE);
-        tuple_size += padding;
-
+                                  const size_t col_sizes[], const size_t offsets[], const size_t tuple_size, const TSimd<ui8> perms[],
+                                  const size_t start = 0) {
         const ui8 tuples_per_load =
             std::max(1ul, TSimd<ui8>::SIZE / tuple_size);
-        ui8 col_store_sizes[Cols];
-        for (ui8 col = 0; col != Cols; ++col) {
-            col_store_sizes[col] = col_sizes[col] * tuples_per_load;
-        };
-
-        TSimd<ui8> perms[Cols][LoadsPerStore];
-        for (ui8 col = 0, offset = 0; col != Cols; ++col) {
-            for (ui8 ind = 0; ind != LoadsPerStore; ++ind) {
-                perms[col][ind] =
-                    BuildTuplePerm(col_sizes[col], tuple_size - col_sizes[col],
-                                   offset, ind * col_store_sizes[col], false);
-            }
-            offset += col_sizes[col];
-        }
+        const size_t simd_iters =
+            (size ? size - 1 : 0) / (tuples_per_load * LoadsPerStore);
 
         TSimd<ui8> src_regs[LoadsPerStore];
         TSimd<ui8> perm_regs[LoadsPerStore];
 
         auto src = src_rows;
+        const ui8 *const end = src_rows + simd_iters * tuples_per_load *
+                                              LoadsPerStore * tuple_size;
 
         ui8 *dsts[Cols];
         std::memcpy(dsts, dst_cols, sizeof(dsts));
-
-        const size_t simd_iters =
-            (size ? size - 1 : 0) / (tuples_per_load * LoadsPerStore);
-        const ui8 *const end = src_rows + simd_iters * tuples_per_load *
-                                              LoadsPerStore * tuple_size;
+        for (ui8 col = 0; col != Cols; ++col) {
+            dsts[col] += col_sizes[col] * start;
+        }
 
         while (src != end) {
             for (ui8 iter = 0; iter != LoadsPerStore; ++iter) {
@@ -423,17 +405,17 @@ template <class TTraits> struct SIMDPack {
                 // shuffling each col bytes to the right positions
                 // then blending them together with 'or'
                 for (ui8 iter = 0; iter != LoadsPerStore; ++iter) {
-                    perm_regs[iter] = src_regs[iter].Shuffle(perms[col][iter]);
+                    perm_regs[iter] = src_regs[iter].Shuffle(perms[col * LoadsPerStore + iter]);
                 }
 
-                TupleOr(perm_regs).Store(dsts[col]);
-                dsts[col] += col_store_sizes[col] * LoadsPerStore;
+                TupleOr<LoadsPerStore>(perm_regs).Store(dsts[col]);
+                dsts[col] += col_sizes[col] * tuples_per_load * LoadsPerStore;
             }
         }
 
         UnpackTupleFallbackRowImpl(
-            src, dsts, size - simd_iters * tuples_per_load * LoadsPerStore,
-            col_sizes, padding);
+            src, dsts, Cols, size - simd_iters * tuples_per_load * LoadsPerStore,
+            col_sizes, offsets, tuple_size);
     }
 };
 
