@@ -13,6 +13,7 @@ REQUIREMENTS(ram:32)
 
 SRCS(
     packed_tuple_ut.cpp
+    accumulator_ut.cpp
 )
 
 PEERDIR(
