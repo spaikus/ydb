@@ -28,7 +28,7 @@ public:
 
 public:
     // Creates new accumulator for nBuckets for given layout
-    TAccumulator(TTupleLayout* layout, ui32 nBuckets = 256);
+    TAccumulator(TTupleLayout* layout, ui32 nBuckets = 64);
     ~TAccumulator();
 
     // Adds new nItems of data in TTupleLayout representation to accumulator 

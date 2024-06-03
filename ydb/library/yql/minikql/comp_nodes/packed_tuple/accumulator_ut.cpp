@@ -20,13 +20,14 @@ namespace NPackedTuple {
 
 using namespace std::chrono_literals;
 
-static volatile bool IsVerbose = false;
+static volatile bool IsVerbose = true;
 #define CTEST (IsVerbose ? Cerr : Cnull)
 
 Y_UNIT_TEST_SUITE(Accumulator) {
 
 Y_UNIT_TEST(CreateAccumulator) {
     TScopedAlloc alloc(__LOCATION__);
+
     TColumnDesc kc1, kc2, pc1, pc2, pc3;
 
     kc1.Role = EColumnRole::Key;
@@ -57,6 +58,7 @@ Y_UNIT_TEST(CreateAccumulator) {
 
 Y_UNIT_TEST(BenchAccumulator) {
     TScopedAlloc alloc(__LOCATION__);
+
     TColumnDesc kc1, kc2,  pc1, pc2;
 
     kc1.Role = EColumnRole::Key;
@@ -174,14 +176,15 @@ Y_UNIT_TEST(AccumulatorFuzz) {
             accum.AddData(res.data(), subRows);
 
             ui32 totalCount = 0;
-            for (ui32 i = 0; i < 256; ++i) {
+            ui32 nBuckets = 64; // INFO: do not forget to change this value if default nBuckets in accumulator has changed
+            for (ui32 i = 0; i < nBuckets; ++i) {
                 auto info = accum.GetBucket(i);
                 const ui8* FirstLevelBucket = info.FirstLevelBucket;
                 const ui8* SecondLevelBucket = info.SecondLevelBucket;
 
                 ui32 offset = 0;
                 for (ui32 count = 0; count < info.FirstLevelElements; ++count) {
-                    auto suffix = (*reinterpret_cast<const ui32*>(FirstLevelBucket + offset)) & (256 /* default nBuckets */ - 1);
+                    auto suffix = (*reinterpret_cast<const ui32*>(FirstLevelBucket + offset)) & (nBuckets - 1);
                     UNIT_ASSERT(suffix == i);
                     offset += info.Layout->TotalRowSize;
                     totalCount++;
@@ -189,7 +192,7 @@ Y_UNIT_TEST(AccumulatorFuzz) {
                 offset = 0;
                 if (info.SecondLevelElements > 0) {
                     for (ui32 count = 0; count < info.SecondLevelElements; ++count) {
-                        auto suffix = (*reinterpret_cast<const ui32*>(SecondLevelBucket + offset)) & (256 /* default nBuckets */ - 1);
+                        auto suffix = (*reinterpret_cast<const ui32*>(SecondLevelBucket + offset)) & (nBuckets - 1);
                         UNIT_ASSERT(suffix == i);
                         offset += info.Layout->TotalRowSize;
                         totalCount++;

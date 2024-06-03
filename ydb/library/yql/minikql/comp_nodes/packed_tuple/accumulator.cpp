@@ -1,5 +1,8 @@
 #include "accumulator.h"
 
+#include <cstdlib>
+#include <ydb/library/yql/utils/simd/simd.h>
+
 namespace NKikimr {
 namespace NMiniKQL {
 namespace NPackedTuple {
@@ -9,24 +12,23 @@ TAccumulator::TAccumulator(TTupleLayout* layout, ui32 nBuckets)
     : NBuckets_(nBuckets)
     , Layout_(layout)
     , SecondLevelAccum_(NBuckets_, nullptr)
-    // std::max for case when TotalRowSize extremly big, so 64KB wouldn't be enough
-    , FirstLevelMemLimit_(std::max<ui32>((Layout_->TotalRowSize + sizeof(ui32)) * NBuckets_, 64000 /* 64KB */))
+    // std::max for case when TotalRowSize extremly big, so 32KB wouldn't be enough
+    , FirstLevelMemLimit_(std::max<ui32>((Layout_->TotalRowSize + sizeof(ui32)) * NBuckets_, 32000 /* 32KB */))
     , FirstLevelBucketSize_(FirstLevelMemLimit_ / NBuckets_)
     , SecondLevelBucketSizes_(NBuckets_, 0)
-    // std::max for case when TotalRowSize extremly big, so 1KB for L2 bucket wouldn't be enough
-    , MinimalSecondLevelBucketSize_(std::max<ui32>(1000 /* 1KB */, 4 * Layout_->TotalRowSize)) {
+    // std::max for case when TotalRowSize extremly big, so 4KB for L2 bucket wouldn't be enough
+    , MinimalSecondLevelBucketSize_(std::max<ui32>(4000 /* 4KB */, 4 * Layout_->TotalRowSize)) {
 
     Y_ASSERT(nBuckets > 0);
-    FirstLevelAccum_ = TMKQLAllocator<ui8>::allocate(FirstLevelMemLimit_);
+    FirstLevelMemLimit_ = (FirstLevelMemLimit_ / 64 + 1) * 64; // multiple of 64
+    FirstLevelAccum_ = static_cast<ui8*>(std::aligned_alloc(64 /* cache line size */, FirstLevelMemLimit_));
     std::memset(FirstLevelAccum_, 0, FirstLevelMemLimit_);
 }
 
 TAccumulator::~TAccumulator() {
-    TMKQLAllocator<ui8>::deallocate(FirstLevelAccum_, FirstLevelMemLimit_);
+    std::free(FirstLevelAccum_);
     for (ui32 i = 0; i < NBuckets_; ++i) {
-        if (SecondLevelAccum_[i] != nullptr) {
-            TMKQLAllocator<ui8>::deallocate(SecondLevelAccum_[i], SecondLevelBucketSizes_[i]);
-        }
+        std::free(SecondLevelAccum_[i]);
     }
 }
 
@@ -46,14 +48,15 @@ void TAccumulator::AddData(const ui8* data, ui32 nItems) {
 
         ui8* storeAddr{nullptr};
         if (nTuplesFirstLevel == tuplesPerFirstLevelBucket) {
-            if (nTuplesSecondLevel == SecondLevelBucketSizes_[bucketId] / Layout_->TotalRowSize) {
+            if (nTuplesSecondLevel == SecondLevelBucketSizes_[bucketId] / Layout_->TotalRowSize) [[unlikely]] {
                 ui32 newSize = SecondLevelBucketSizes_[bucketId] == 0
                                ? MinimalSecondLevelBucketSize_
                                : SecondLevelBucketSizes_[bucketId] * GrowthRate_;
-                ui8* newBucket = TMKQLAllocator<ui8>::allocate(newSize);
-                if (SecondLevelAccum_[bucketId] != nullptr) {
+                newSize = (newSize / 64 + 1) * 64; // multiple of 64
+                ui8* newBucket = static_cast<ui8*>(std::aligned_alloc(64 /* cache line size */, newSize));
+                if (SecondLevelAccum_[bucketId] != nullptr) [[unlikely]] {
                     std::memcpy(newBucket, SecondLevelAccum_[bucketId], SecondLevelBucketSizes_[bucketId]);
-                    TMKQLAllocator<ui8>::deallocate(SecondLevelAccum_[bucketId], SecondLevelBucketSizes_[bucketId]);
+                    std::free(SecondLevelAccum_[bucketId]);
                 }
                 SecondLevelAccum_[bucketId] = newBucket;
                 SecondLevelBucketSizes_[bucketId] = newSize;
