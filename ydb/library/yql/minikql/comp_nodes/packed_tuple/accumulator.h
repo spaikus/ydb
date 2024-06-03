@@ -27,15 +27,28 @@ public:
     };
 
 public:
+    virtual ~TAccumulator() {};
+
     // Creates new accumulator for nBuckets for given layout
-    TAccumulator(TTupleLayout* layout, ui32 nBuckets = 64);
-    ~TAccumulator();
+    static THolder<TAccumulator> Create(TTupleLayout* layout, ui32 nBuckets = 64);
 
     // Adds new nItems of data in TTupleLayout representation to accumulator 
-    void AddData(const ui8* data, ui32 nItems);
+    virtual void AddData(const ui8* data, ui32 nItems) = 0;
 
     // Returns bucket info
-    BucketInfo GetBucket(ui32 bucket);
+    virtual BucketInfo GetBucket(ui32 bucket) const = 0;
+};
+
+
+template <typename TTrait>
+class TAccumulatorImpl: public TAccumulator {   
+public:
+    TAccumulatorImpl(TTupleLayout* layout, ui32 nBuckets = 64);
+    ~TAccumulatorImpl();
+
+    void AddData(const ui8* data, ui32 nItems) override;
+
+    BucketInfo GetBucket(ui32 bucket) const override;
 
 private:
     ui32 NBuckets_{0};                                                  // Number of buckets

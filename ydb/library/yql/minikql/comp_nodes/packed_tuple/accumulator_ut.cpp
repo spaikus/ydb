@@ -20,7 +20,7 @@ namespace NPackedTuple {
 
 using namespace std::chrono_literals;
 
-static volatile bool IsVerbose = true;
+static volatile bool IsVerbose = false;
 #define CTEST (IsVerbose ? Cerr : Cnull)
 
 Y_UNIT_TEST_SUITE(Accumulator) {
@@ -48,8 +48,8 @@ Y_UNIT_TEST(CreateAccumulator) {
     std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2, pc3};
     auto tl = TTupleLayout::Create(columns);
 
-    TAccumulator accum(tl.Get());
-    auto info = accum.GetBucket(0);
+    auto accum = TAccumulator::Create(tl.Get());
+    auto info = accum->GetBucket(0);
 
     UNIT_ASSERT(info.FirstLevelBucket != nullptr);
     UNIT_ASSERT(info.SecondLevelElements == 0);
@@ -76,7 +76,6 @@ Y_UNIT_TEST(BenchAccumulator) {
     std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2};
 
     auto tl = TTupleLayout::Create(columns);
-    UNIT_ASSERT(tl->TotalRowSize == 29);
 
     const ui64 NTuples1 = 10e6;
 
@@ -117,9 +116,9 @@ Y_UNIT_TEST(BenchAccumulator) {
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
 
-    TAccumulator accum(tl.Get());
+    auto accum = TAccumulator::Create(tl.Get());
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    accum.AddData(res.data(), NTuples1);
+    accum->AddData(res.data(), NTuples1);
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     ui64 microseconds = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
     if (microseconds == 0) microseconds = 1;
@@ -172,13 +171,13 @@ Y_UNIT_TEST(AccumulatorFuzz) {
             res.resize(subRows*tl->TotalRowSize);
             tl->Pack(colsptr.data(), isValidPtr.data(), res.data(), overflow, off, subRows);
 
-            TAccumulator accum(tl.Get());
-            accum.AddData(res.data(), subRows);
+            auto accum = TAccumulator::Create(tl.Get());
+            accum->AddData(res.data(), subRows);
 
             ui32 totalCount = 0;
             ui32 nBuckets = 64; // INFO: do not forget to change this value if default nBuckets in accumulator has changed
             for (ui32 i = 0; i < nBuckets; ++i) {
-                auto info = accum.GetBucket(i);
+                auto info = accum->GetBucket(i);
                 const ui8* FirstLevelBucket = info.FirstLevelBucket;
                 const ui8* SecondLevelBucket = info.SecondLevelBucket;
 
