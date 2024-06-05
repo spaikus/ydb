@@ -31,7 +31,11 @@ TAccumulatorImpl<TTraits>::TAccumulatorImpl(TTupleLayout* layout, ui32 nBuckets)
     // std::max for case when TotalRowSize extremly big, so 32KB wouldn't be enough
     , FirstLevelMemLimit_(std::max<ui32>((Layout_->TotalRowSize + sizeof(ui32) + TTraits::Size) * NBuckets_, 32000 /* 32KB */))
     , FirstLevelBucketSize_(FirstLevelMemLimit_ / NBuckets_)
+    , TuplesPerFirstLevelBucket_(std::min<ui32>(
+        (FirstLevelBucketSize_ - sizeof(ui32) - TTraits::Size) / Layout_->TotalRowSize,
+        255 /* 0xFF */))
     , SecondLevelBucketSizes_(NBuckets_, 0)
+    , TuplesPerSecondLevelBucket_(NBuckets_, 0)
     // std::max for case when TotalRowSize extremly big, so 4KB for L2 bucket wouldn't be enough
     , MinimalSecondLevelBucketSize_(std::max<ui32>(4000 /* 4KB */, 4 * (Layout_->TotalRowSize + TTraits::Size))) {
 
@@ -58,34 +62,35 @@ template <typename TTraits>
 void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
     using TSimd8 = typename TTraits:: template TSimd8<ui8>;
 
-    ui32 tuplesPerFirstLevelBucket = std::min<ui32>(
-        (FirstLevelBucketSize_ - sizeof(ui32) - TTraits::Size) / Layout_->TotalRowSize,
-        255 /* 0xFF */);
-    const ui8* end = data + nItems * Layout_->TotalRowSize;
+    const auto layoutTotalRowSize = Layout_->TotalRowSize;
+    const ui32 bound = std::max<ui32>(layoutTotalRowSize, TTraits::Size);
+    const ui8* const end = data + nItems * Layout_->TotalRowSize;
 
     for (ui32 i = 0; i < nItems; ++i) {
-        const ui8* tuple = data + i * Layout_->TotalRowSize;
-        ui32 hash        = *reinterpret_cast<const ui32*>(tuple);
-        ui32 bucketId    = hash & (NBuckets_ - 1);
+        const ui8* tuple = data + i * layoutTotalRowSize;
+        const ui32 bucketId    = *reinterpret_cast<const ui32*>(tuple) & (NBuckets_ - 1);
 
-        ui32 firstLevelBucketOffset = bucketId * FirstLevelBucketSize_;
-        ui8* firstLevelBucketAddr   = FirstLevelAccum_ + firstLevelBucketOffset;
+        ui8* const firstLevelBucketAddr = FirstLevelAccum_ + bucketId * FirstLevelBucketSize_;
 
-        ui32 nTuplesTotal       = *reinterpret_cast<ui32*>(firstLevelBucketAddr);
-        ui32 nTuplesFirstLevel  = nTuplesTotal & 0xFF;
-        ui32 nTuplesSecondLevel = nTuplesTotal >> 8;
+        ui32& nBucketTuplesTotal = *reinterpret_cast<ui32*>(firstLevelBucketAddr);
+        ui32 nBucketTuplesSecondLevel = nBucketTuplesTotal - TuplesPerFirstLevelBucket_;
 
         ui8* storeAddr{nullptr};
 
-        if (nTuplesFirstLevel == tuplesPerFirstLevelBucket) {
-            ui32 tuplesPerSecondLevelBucket = SecondLevelBucketSizes_[bucketId] == 0
-                                              ? 0
-                                              : (SecondLevelBucketSizes_[bucketId] - TTraits::Size) / Layout_->TotalRowSize;
+        if (nBucketTuplesTotal >= TuplesPerFirstLevelBucket_) {
+            const ui32 tuplesPerSecondLevelBucket = TuplesPerSecondLevelBucket_[bucketId];
 
-            if (nTuplesSecondLevel == tuplesPerSecondLevelBucket) [[unlikely]] {
-                ui32 newSize = SecondLevelBucketSizes_[bucketId] == 0
-                               ? MinimalSecondLevelBucketSize_
-                               : SecondLevelBucketSizes_[bucketId] * GrowthRate_;
+            if (nBucketTuplesSecondLevel == tuplesPerSecondLevelBucket) [[unlikely]] {
+                ui32 newSize =
+                    tuplesPerSecondLevelBucket == 0
+                        ? MinimalSecondLevelBucketSize_
+                        : std::max({ui32(SecondLevelBucketSizes_[bucketId] *
+                                         GrowthRate_),
+                                    ui32(1 + nBucketTuplesTotal +
+                                         ui64(nItems - i) * nBucketTuplesTotal /
+                                             TotalTuples_ * layoutTotalRowSize *
+                                             GrowthRate_)});
+
                 newSize = (newSize / TTraits::Size + 1) * TTraits::Size; // multiple of register width
                 ui8* newBucket = static_cast<ui8*>(std::aligned_alloc(TTraits::Size, newSize));
 
@@ -103,18 +108,21 @@ void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
 
                 SecondLevelAccum_[bucketId] = newBucket;
                 SecondLevelBucketSizes_[bucketId] = newSize;
+                TuplesPerSecondLevelBucket_[bucketId] = (SecondLevelBucketSizes_[bucketId] - TTraits::Size) / layoutTotalRowSize;
             }
 
-            storeAddr = SecondLevelAccum_[bucketId] + nTuplesSecondLevel * Layout_->TotalRowSize;
-            nTuplesSecondLevel++;
+            storeAddr = SecondLevelAccum_[bucketId] + nBucketTuplesSecondLevel * layoutTotalRowSize;
+            nBucketTuplesTotal++;
+            TotalTuples_++;
+
         } else {
-            storeAddr = firstLevelBucketAddr + sizeof(ui32) + nTuplesFirstLevel * Layout_->TotalRowSize;
-            nTuplesFirstLevel++;
+            storeAddr = firstLevelBucketAddr + sizeof(ui32) + nBucketTuplesTotal * layoutTotalRowSize;
+            nBucketTuplesTotal++;
+            TotalTuples_++;
         }
 
         if constexpr (TTraits::Size > 8) { // SSE and AVX case
             // max for the case when the row size < register width
-            ui32 bound = std::max<ui32>(Layout_->TotalRowSize, TTraits::Size);
             ui32 offset = 0;
 
             for (; offset < bound - TTraits::Size
@@ -131,11 +139,8 @@ void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
                 reg.Store(storeAddr);
             }
         } else { // no SIMD case
-            std::memcpy(storeAddr, tuple, Layout_->TotalRowSize);
+            std::memcpy(storeAddr, tuple, layoutTotalRowSize);
         }
-
-        nTuplesTotal = (nTuplesSecondLevel << 8) | nTuplesFirstLevel;
-        *reinterpret_cast<ui32*>(firstLevelBucketAddr) = nTuplesTotal;
     }
 }
 
@@ -150,15 +155,18 @@ TAccumulatorImpl<NSimd::TSimdSSE42Traits>::AddData(const ui8* data, ui32 nItems)
 template <typename TTraits>
 TAccumulator::BucketInfo TAccumulatorImpl<TTraits>::GetBucket(ui32 bucket) const {
     TAccumulator::BucketInfo result;
-    ui8* bucketPtr = FirstLevelAccum_ + bucket * FirstLevelBucketSize_;
+    ui8* const bucketPtr = FirstLevelAccum_ + bucket * FirstLevelBucketSize_;
 
     result.FirstLevelBucket     = bucketPtr + sizeof(ui32);
     result.SecondLevelBucket    = SecondLevelAccum_[bucket];
 
-    ui32 nTuplesTotal           = *reinterpret_cast<ui32*>(bucketPtr);
-    result.FirstLevelElements   = nTuplesTotal & 0xFF;
-    result.SecondLevelElements  = nTuplesTotal >> 8;
-    result.Layout               = Layout_;
+    const ui32 nBucketTuplesTotal = *reinterpret_cast<ui32*>(bucketPtr);
+    result.FirstLevelElements     = std::min(nBucketTuplesTotal, TuplesPerFirstLevelBucket_);
+    result.SecondLevelElements    =
+        nBucketTuplesTotal > TuplesPerFirstLevelBucket_
+            ? nBucketTuplesTotal - TuplesPerFirstLevelBucket_
+            : 0;
+    result.Layout = Layout_;
 
     return result;
 }

@@ -51,15 +51,18 @@ public:
     BucketInfo GetBucket(ui32 bucket) const override;
 
 private:
-    ui32 NBuckets_{0};                                                  // Number of buckets
-    TTupleLayout* Layout_;                                              // Tuple layout
-    ui8* FirstLevelAccum_{nullptr};                                     // First level small accumulator.  Should fit into L1 cache
-    std::vector<ui8*, TMKQLAllocator<ui8*>> SecondLevelAccum_;          // Second level accumulator data
-    ui32 FirstLevelMemLimit_{0};                                        // Memory limit for first level accumulator
-    ui32 FirstLevelBucketSize_{0};                                      // Fixed bucket size of level 1 accumulator
-    std::vector<ui32, TMKQLAllocator<ui32>> SecondLevelBucketSizes_;    // Fixed bucket sizes for level 2 accumulator
-    ui32 MinimalSecondLevelBucketSize_{0};                              // Fixed minimum initial size for second level bucket
-    static constexpr double GrowthRate_{1.5};                           // Growth rate for second level buckets
+    ui32 NBuckets_{0};                                                   // Number of buckets
+    TTupleLayout* Layout_;                                               // Tuple layout
+    ui8* FirstLevelAccum_{nullptr};                                      // First level small accumulator. Should fit into L1 cache
+    std::vector<ui8*, TMKQLAllocator<ui8*>> SecondLevelAccum_;           // Second level accumulator data
+    ui32 FirstLevelMemLimit_{0};                                         // Memory limit for first level accumulator
+    ui32 FirstLevelBucketSize_{0};                                       // Fixed bucket size of level 1 accumulator
+    ui32 TuplesPerFirstLevelBucket_{0};                                  // Fixed bucket tuples number of level 1
+    std::vector<ui32, TMKQLAllocator<ui32>> SecondLevelBucketSizes_;     // Fixed bucket sizes for level 2 accumulator
+    std::vector<ui32, TMKQLAllocator<ui32>> TuplesPerSecondLevelBucket_; // Fixed bucket tuples number of level 2
+    ui32 TotalTuples_{0};                                                // Total tuples number in all buckets and levels
+    ui32 MinimalSecondLevelBucketSize_{0};                               // Fixed minimum initial size for second level bucket
+    static constexpr double GrowthRate_{1.5};                            // Growth rate for second level buckets
 };
 
 
