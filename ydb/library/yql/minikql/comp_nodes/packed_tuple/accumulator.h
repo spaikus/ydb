@@ -63,6 +63,7 @@ private:
     ui32 TotalTuples_{0};                                                // Total tuples number in all buckets and levels
     ui32 MinimalSecondLevelBucketSize_{0};                               // Fixed minimum initial size for second level bucket
     static constexpr double GrowthRate_{1.5};                            // Growth rate for second level buckets
+    static constexpr double AddReserveMul_{1.2};                         // Add method reserve size multiplier for second level buckets
 };
 
 

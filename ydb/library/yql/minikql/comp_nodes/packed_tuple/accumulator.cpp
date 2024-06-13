@@ -86,10 +86,9 @@ void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
                         ? MinimalSecondLevelBucketSize_
                         : std::max({ui32(SecondLevelBucketSizes_[bucketId] *
                                          GrowthRate_),
-                                    ui32(1 + nBucketTuplesTotal +
-                                         ui64(nItems - i) * nBucketTuplesTotal /
-                                             TotalTuples_ * layoutTotalRowSize *
-                                             GrowthRate_)});
+                                    ui32(1 + nBucketTuplesSecondLevel +
+                                         ui64(nItems - i) * layoutTotalRowSize *
+                                             AddReserveMul_ / NBuckets_)});
 
                 newSize = (newSize / TTraits::Size + 1) * TTraits::Size; // multiple of register width
                 ui8* newBucket = static_cast<ui8*>(std::aligned_alloc(TTraits::Size, newSize));
@@ -113,12 +112,9 @@ void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
 
             storeAddr = SecondLevelAccum_[bucketId] + nBucketTuplesSecondLevel * layoutTotalRowSize;
             nBucketTuplesTotal++;
-            TotalTuples_++;
-
         } else {
             storeAddr = firstLevelBucketAddr + sizeof(ui32) + nBucketTuplesTotal * layoutTotalRowSize;
             nBucketTuplesTotal++;
-            TotalTuples_++;
         }
 
         if constexpr (TTraits::Size > 8) { // SSE and AVX case
@@ -142,6 +138,8 @@ void TAccumulatorImpl<TTraits>::AddData(const ui8* data, ui32 nItems) {
             std::memcpy(storeAddr, tuple, layoutTotalRowSize);
         }
     }
+
+    TotalTuples_ += nItems;
 }
 
 template __attribute__((target("avx2"))) void
