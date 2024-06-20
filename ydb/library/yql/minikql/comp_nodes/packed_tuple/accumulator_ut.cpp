@@ -131,7 +131,6 @@ Y_UNIT_TEST(BenchAccumulator) {
     UNIT_ASSERT(true);
 } // Y_UNIT_TEST(BenchAccumulator)
 
-
 Y_UNIT_TEST(AccumulatorFuzz) {
     TScopedAlloc alloc(__LOCATION__);
 
