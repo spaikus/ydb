@@ -10,7 +10,7 @@ const int BUCKETS = 1024;  // Размер гистограммы
 
 // Функция для получения 10 средних битов из хеша
 inline ui16 GetMiddleBits(ui32 hash) {
-    return (hash >> 11) & 0x3FF; // Берем 10 битов из середины хеша
+    return (hash >> 11) % BUCKETS; // Берем 10 битов из середины хеша
 }
 
 // Структура для хранения результатов подсчета
@@ -36,33 +36,33 @@ void CalculateCardinality(const std::vector<ui32>& hashes1, const std::vector<ui
 
     // Заполняем вторую гистограмму с другой выборкой битов из хеша
     for (ui32 hash : hashes1) {
-        ui16 bucketIdx = (hash >> 15) & 0x3FF; // Берем другие 10 битов
+        ui16 bucketIdx = (hash >> 15) % BUCKETS; // Берем другие 10 битов
         histogram2[bucketIdx].count1++;
     }
     for (ui32 hash : hashes2) {
-        ui16 bucketIdx = (hash >> 15) & 0x3FF; // Берем другие 10 битов
+        ui16 bucketIdx = (hash >> 15) % BUCKETS; // Берем другие 10 битов
         histogram2[bucketIdx].count2++;
     }
 
     // Подсчитываем результаты
-    ui32 unique1 = 0, unique2 = 0, intersection = 0;
+    ui32 unique1 = 0, unique2 = 0, join = 0;
 
     // Оцениваем на основе первой гистограммы
     for (const auto& bucket : histogram1) {
         unique1 += bucket.count1 > 0;
         unique2 += bucket.count2 > 0;
-        intersection += std::min(bucket.count1, bucket.count2);
+        join += std::min(bucket.count1, bucket.count2);
     }
 
     // Оцениваем на основе второй гистограммы
     for (const auto& bucket : histogram2) {
         unique1 += bucket.count1 > 0;
         unique2 += bucket.count2 > 0;
-        intersection += std::min(bucket.count1, bucket.count2);
+        join += std::min(bucket.count1, bucket.count2);
     }
 
     // Выводим оценку кардинальности
     std::cout << "Оценка уникальных значений в первом массиве: " << unique1 / 2 << std::endl;
     std::cout << "Оценка уникальных значений во втором массиве: " << unique2 / 2 << std::endl;
-    std::cout << "Оценка кардинальности пересечения: " << intersection / 2 << std::endl;
+    std::cout << "Оценка кардинальности пересечения: " << join / 2 << std::endl;
 }
