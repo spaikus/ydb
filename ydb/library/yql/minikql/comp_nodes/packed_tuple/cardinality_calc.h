@@ -45,24 +45,14 @@ void CalculateCardinality(const std::vector<ui32>& hashes1, const std::vector<ui
     }
 
     // Подсчитываем результаты
-    ui32 unique1 = 0, unique2 = 0, join = 0;
+    ui64 joinCardinality = 0;
 
-    // Оцениваем на основе первой гистограммы
     for (const auto& bucket : histogram1) {
-        unique1 += bucket.count1 > 0;
-        unique2 += bucket.count2 > 0;
-        join += std::min(bucket.count1, bucket.count2);
+        joinCardinality += static_cast<ui64>(bucket.count1) * bucket.count2;
     }
-
-    // Оцениваем на основе второй гистограммы
     for (const auto& bucket : histogram2) {
-        unique1 += bucket.count1 > 0;
-        unique2 += bucket.count2 > 0;
-        join += std::min(bucket.count1, bucket.count2);
+        joinCardinality += static_cast<ui64>(bucket.count1) * bucket.count2;
     }
 
-    // Выводим оценку кардинальности
-    std::cout << "Оценка уникальных значений в первом массиве: " << unique1 / 2 << std::endl;
-    std::cout << "Оценка уникальных значений во втором массиве: " << unique2 / 2 << std::endl;
-    std::cout << "Оценка кардинальности пересечения: " << join / 2 << std::endl;
+    std::cout << "Оценка кардинальности джоина: " << joinCardinality / 2 << std::endl;
 }
