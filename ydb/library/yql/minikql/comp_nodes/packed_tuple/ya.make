@@ -2,6 +2,7 @@ LIBRARY()
 
 SRCS(
     tuple.cpp
+    page_hash_table.cpp
 )
 
 PEERDIR(

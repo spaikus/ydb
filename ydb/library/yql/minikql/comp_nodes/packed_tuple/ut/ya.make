@@ -16,6 +16,7 @@ ENDIF()
 
 SRCS(
     packed_tuple_ut.cpp
+    page_hash_table_ut.cpp
 )
 
 PEERDIR(
