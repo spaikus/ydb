@@ -78,6 +78,8 @@ struct TTupleLayout {
     virtual void Unpack(ui8 **columns, ui8 **isValidBitmask, const ui8 *res,
                         const std::vector<ui8, TMKQLAllocator<ui8>> &overflow,
                         ui32 start, ui32 count) const = 0;
+
+    bool KeysEqual(const ui8 *lhsRow, const ui8 *lhsOverflow, const ui8 *rhsRow, const ui8 *rhsOverflow) const;
 };
 
 template <typename TTrait> struct TTupleLayoutFallback : public TTupleLayout {
