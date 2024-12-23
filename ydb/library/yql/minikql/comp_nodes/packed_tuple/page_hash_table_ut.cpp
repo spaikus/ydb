@@ -20,46 +20,46 @@ namespace NPackedTuple {
 
 using namespace std::chrono_literals;
 
-static volatile bool IsVerbose = true;
+static volatile bool IsVerbose = false;
 #define CTEST (IsVerbose ? Cerr : Cnull)
 
 namespace {
 
-std::vector<std::pair<ui32, const ui8*>> GetRandomTuples(ui32 count, ui32 nTuples, const ui8* data, const TTupleLayout* layout) {
-    std::mt19937_64 rng;
-    std::vector<ui64> indexes(count);
-    std::vector<std::pair<ui32, const ui8*>> result;
+std::vector<ui8> GetRandomTuples(ui32 count, ui32 nTuples, const ui8* data, const TTupleLayout* layout) {
+    std::mt19937 rng(std::random_device{}());
+    std::vector<ui32> indexes(count);
     std::generate(indexes.begin(), indexes.end(), rng);
-    for (auto& index: indexes) {
-        index %= nTuples;
-    }
 
-    for (auto index: indexes) {
+    std::vector<ui8> result(count * layout->TotalRowSize, 0);
+    for (ui32 i = 0; i < indexes.size(); ++i) {
+        auto index = indexes[i] % nTuples;
         auto tuple = data + index * layout->TotalRowSize;
-        result.emplace_back(ReadUnaligned<ui32>(tuple), tuple + layout->KeyColumnsOffset);
+        std::memcpy(result.data() + i * layout->TotalRowSize, tuple, layout->TotalRowSize);
     }
 
     return result;
 }
 
-// -----------------------------------------------------------------
-ui64 TUPLE_COUNTER = 0;
-
-Y_FORCE_INLINE void IncCounter(const ui8* tuple) {
-    if (tuple != nullptr) {
-        TUPLE_COUNTER++;
+std::vector<ui8> GetNonExistentTuples(ui32 count, ui32 nTuples, const ui8* data, const TTupleLayout* layout) {
+    std::mt19937 rng(std::random_device{}());
+    std::unordered_set<ui32> hashes;
+    for (ui32 i = 0; i < nTuples; ++i) {
+        auto tuple = data + i * layout->TotalRowSize;
+        hashes.insert(ReadUnaligned<ui32>(tuple));
     }
-}
 
-ui8* KEY_TO_CHECK = nullptr;
-ui64 KEY_LEN = 0;
-ui64 KEY_OFFSET = 0;
-bool WAS_FOUND = false;
-
-Y_FORCE_INLINE void CheckEq(const ui8* tuple) {
-    if (std::equal(KEY_TO_CHECK, KEY_TO_CHECK + KEY_LEN, tuple + KEY_OFFSET)) {
-        WAS_FOUND = true;
+    std::vector<ui8> result(count * layout->TotalRowSize, 1);
+    ui32 counter = 0;
+    ui32 nextHash = 0;
+    while (counter < count) {
+        if (!hashes.count(nextHash)) {
+            WriteUnaligned<ui8>(result.data() + counter * layout->TotalRowSize, 0);
+            ++counter;
+        }
+        nextHash = rng();
     }
+
+    return result;
 }
 
 } // namespace
@@ -67,7 +67,7 @@ Y_FORCE_INLINE void CheckEq(const ui8* tuple) {
 // -----------------------------------------------------------------
 Y_UNIT_TEST_SUITE(PageHashTable) {
 
-Y_UNIT_TEST(CreatePageHashTable) {
+Y_UNIT_TEST(Create) {
     TScopedAlloc alloc(__LOCATION__);
 
     TColumnDesc kc1, kc2, pc1, pc2, pc3;
@@ -89,12 +89,157 @@ Y_UNIT_TEST(CreatePageHashTable) {
 
     std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2, pc3};
     auto tl = TTupleLayout::Create(columns);
-    auto ht = TPageHashTable::Create(tl.Get());
+    auto ht = TPageHashTable::Create(tl.Get(), 100);
 
     UNIT_ASSERT(ht.Get() != nullptr);
-} // Y_UNIT_TEST(CreatePageHashTable)
+} // Y_UNIT_TEST(Create)
 
-Y_UNIT_TEST(ApplyPageHashTable) {
+Y_UNIT_TEST(BenchBuild) {
+    TScopedAlloc alloc(__LOCATION__);
+
+    TColumnDesc kc1, pc1;
+
+    kc1.Role = EColumnRole::Key;
+    kc1.DataSize = 4;
+
+    pc1.Role = EColumnRole::Payload;
+    pc1.DataSize = 4;
+
+    std::vector<TColumnDesc> columns{kc1, pc1};
+
+    auto tl = TTupleLayout::Create(columns);
+
+    const ui64 NTuples1 = 128e5;
+
+    const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
+
+    std::vector<ui32> col1(NTuples1, 0);
+    std::vector<ui32> col2(NTuples1, 0);
+
+    std::vector<ui8> res(Tuples1DataBytes + 64, 0);
+
+    for (ui32 i = 0; i < NTuples1; ++i) {
+        col1[i] = i;
+        col2[i] = i;
+    }
+
+    const ui8* cols[2];
+
+    cols[0] = (ui8*) col1.data();
+    cols[1] = (ui8*) col2.data();
+
+    std::vector<ui8> colValid1((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid2((NTuples1 + 7)/8, ~0);
+    const ui8 *colsValid[2] = {
+        colValid1.data(),
+        colValid2.data(),
+    };
+
+    std::vector<ui8, TMKQLAllocator<ui8>> overflow;
+    tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
+
+    CTEST << "=============\nBench Build\n=============" << Endl;
+    {
+        ui64 tuples = 5e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        std::chrono::steady_clock::time_point createBegin = std::chrono::steady_clock::now();
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        std::chrono::steady_clock::time_point createEnd = std::chrono::steady_clock::now();
+        ui64 createUs = std::chrono::duration_cast<std::chrono::microseconds>(createEnd - createBegin).count();
+        if (createUs == 0) createUs = 1;
+
+        std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
+        ht->Build(res.data(), &overflow, tuples);
+        std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
+        ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
+        if (buildUs == 0) buildUs = 1;
+
+        CTEST << "[<L1] Data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Create time for " << tuples << " tuples = " << createUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Create speed = " << bytes / createUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Build time for " << tuples << " tuples = " << buildUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Build speed = " << bytes / buildUs << "[MB/sec]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 8e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        std::chrono::steady_clock::time_point createBegin = std::chrono::steady_clock::now();
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        std::chrono::steady_clock::time_point createEnd = std::chrono::steady_clock::now();
+        ui64 createUs = std::chrono::duration_cast<std::chrono::microseconds>(createEnd - createBegin).count();
+        if (createUs == 0) createUs = 1;
+
+        std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
+        ht->Build(res.data(), &overflow, tuples);
+        std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
+        ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
+        if (buildUs == 0) buildUs = 1;
+
+        CTEST << "[<L2] Data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Create time for " << tuples << " tuples = " << createUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Create speed = " << bytes / createUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Build time for " << tuples << " tuples = " << buildUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Build speed = " << bytes / buildUs << "[MB/sec]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 4e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        std::chrono::steady_clock::time_point createBegin = std::chrono::steady_clock::now();
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        std::chrono::steady_clock::time_point createEnd = std::chrono::steady_clock::now();
+        ui64 createUs = std::chrono::duration_cast<std::chrono::microseconds>(createEnd - createBegin).count();
+        if (createUs == 0) createUs = 1;
+
+        std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
+        ht->Build(res.data(), &overflow, tuples);
+        std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
+        ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
+        if (buildUs == 0) buildUs = 1;
+
+        CTEST << "[<L3] Data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Create time for " << tuples << " tuples = " << createUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Create speed = " << bytes / createUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Build time for " << tuples << " tuples = " << buildUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Build speed = " << bytes / buildUs << "[MB/sec]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 128e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        std::chrono::steady_clock::time_point createBegin = std::chrono::steady_clock::now();
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        std::chrono::steady_clock::time_point createEnd = std::chrono::steady_clock::now();
+        ui64 createUs = std::chrono::duration_cast<std::chrono::microseconds>(createEnd - createBegin).count();
+        if (createUs == 0) createUs = 1;
+
+        std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
+        ht->Build(res.data(), &overflow, tuples);
+        std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
+        ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
+        if (buildUs == 0) buildUs = 1;
+
+        CTEST << "[>L3] Data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Create time for " << tuples << " tuples = " << createUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Create speed = " << bytes / createUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Build time for " << tuples << " tuples = " << buildUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Build speed = " << bytes / buildUs << "[MB/sec]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    CTEST << Endl;
+    UNIT_ASSERT(true);
+} // Y_UNIT_TEST(BenchBuild)
+
+Y_UNIT_TEST(Find) {
     TScopedAlloc alloc(__LOCATION__);
 
     TColumnDesc kc1, kc2, pc1, pc2;
@@ -153,22 +298,15 @@ Y_UNIT_TEST(ApplyPageHashTable) {
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
 
-    auto ht = TPageHashTable::Create(tl.Get());
-
-    ht->Build(res.data(), NTuples1);
+    auto ht = TPageHashTable::Create(tl.Get(), NTuples1);
+    ht->Build(res.data(), &overflow, NTuples1);
 
     auto tuple = res.data() + 42 /* index */ * tl->TotalRowSize;
-    auto hash = ReadUnaligned<ui32>(tuple);
-    KEY_TO_CHECK = tuple + tl->KeyColumnsOffset;
-    KEY_OFFSET = tl->KeyColumnsOffset;
-    KEY_LEN = tl->KeyColumnsSize;
+    auto count = ht->FindMatches(tl.Get(), tuple, overflow, 1);
+    UNIT_ASSERT(count == 1);
+} // Y_UNIT_TEST(Find)
 
-    ht->Apply(hash, KEY_TO_CHECK, CheckEq);
-
-    UNIT_ASSERT(WAS_FOUND == true);
-} // Y_UNIT_TEST(CreatePageHashTable)
-
-Y_UNIT_TEST(BenchPageHashTable_SmallTuple) { // Tuple size <= 16
+Y_UNIT_TEST(BenchPositiveFind) { // find existent tuples
     TScopedAlloc alloc(__LOCATION__);
 
     TColumnDesc kc1, pc1;
@@ -183,7 +321,7 @@ Y_UNIT_TEST(BenchPageHashTable_SmallTuple) { // Tuple size <= 16
 
     auto tl = TTupleLayout::Create(columns);
 
-    const ui64 NTuples1 = 10e6;
+    const ui64 NTuples1 = 128e5;
 
     const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
 
@@ -212,56 +350,270 @@ Y_UNIT_TEST(BenchPageHashTable_SmallTuple) { // Tuple size <= 16
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
 
-    auto NSelected = NTuples1 / 10;
-    auto NSelectedBytes = NSelected * tl->TotalRowSize;
-    auto probes = GetRandomTuples(NSelected, NTuples1, res.data(), tl.Get());
-    auto ht = TPageHashTable::Create(tl.Get());
-
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
-    ht->Build(res.data(), NTuples1);
-    std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
-    ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
-    if (buildUs == 0) buildUs = 1;
-
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point singleFindBegin = std::chrono::steady_clock::now();
+    CTEST << "=============\nBench Positive Find\n=============" << Endl;
     {
-        auto [hash, key] = probes.front();
-        ht->Apply(hash, key, IncCounter);
+        ui64 tuples = 5e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L1] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
     }
-    std::chrono::steady_clock::time_point singleFindEnd = std::chrono::steady_clock::now();
-    ui64 singleFindNs = std::chrono::duration_cast<std::chrono::nanoseconds>(singleFindEnd - singleFindBegin).count();
-    if (singleFindNs == 0) singleFindNs = 1;
-    UNIT_ASSERT(TUPLE_COUNTER == 1);
 
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
-    for (auto [hash, key]: probes) {
-        ht->Apply(hash, key, IncCounter);
+    {
+        ui64 tuples = 8e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L2] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
     }
-    std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
-    ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
-    if (findUs == 0) findUs = 1;
-    UNIT_ASSERT(TUPLE_COUNTER == NSelected);
 
-    CTEST << "[Small] Build time for " << NTuples1 << " tuples = " << buildUs << "[microseconds]" << Endl;
-    CTEST << "[Small] Data size = " << Tuples1DataBytes / (1024 * 1024) << "[MB]" << Endl;
-    CTEST << "[Small] Processing speed = " << Tuples1DataBytes / buildUs << "MB/sec" << Endl;
-    CTEST << Endl;
-    CTEST << "[Small] Single find time = " << singleFindNs << "[nanoseconds]" << Endl;
-    CTEST << Endl;
-    CTEST << "[Small] Massive find time for " << NSelected << " attempts = " << findUs << "[microseconds]" << Endl;
-    CTEST << "[Small] Selected data size = " << NSelectedBytes / (1024 * 1024) << "[MB]" << Endl;
-    CTEST << "[Small] Processing speed = " << NSelectedBytes / (findUs) << "MB/sec" << Endl;
-    CTEST << "-------------------" << Endl;
-    CTEST << Endl;
-} // Y_UNIT_TEST(BenchPageHashTable_SmallTuple)
+    {
+        ui64 tuples = 4e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
 
-Y_UNIT_TEST(BenchPageHashTable_LargeTuple) { // Tuple size > 16
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 128e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[>L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Selected data size = " << selectedBytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    CTEST << Endl;
+} // Y_UNIT_TEST(BenchPositiveFind)
+
+Y_UNIT_TEST(BenchNegativeFind) { // find non-existent tuples
     TScopedAlloc alloc(__LOCATION__);
 
-    TColumnDesc kc1, kc2, pc1, pc2;
+    TColumnDesc kc1, pc1;
+
+    kc1.Role = EColumnRole::Key;
+    kc1.DataSize = 4;
+
+    pc1.Role = EColumnRole::Payload;
+    pc1.DataSize = 4;
+
+    std::vector<TColumnDesc> columns{kc1, pc1};
+
+    auto tl = TTupleLayout::Create(columns);
+
+    const ui64 NTuples1 = 128e5;
+
+    const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
+
+    std::vector<ui32> col1(NTuples1, 0);
+    std::vector<ui32> col2(NTuples1, 0);
+
+    std::vector<ui8> res(Tuples1DataBytes + 64, 0);
+
+    for (ui32 i = 0; i < NTuples1; ++i) {
+        col1[i] = i;
+        col2[i] = i;
+    }
+
+    const ui8* cols[2];
+
+    cols[0] = (ui8*) col1.data();
+    cols[1] = (ui8*) col2.data();
+
+    std::vector<ui8> colValid1((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid2((NTuples1 + 7)/8, ~0);
+    const ui8 *colsValid[2] = {
+        colValid1.data(),
+        colValid2.data(),
+    };
+
+    std::vector<ui8, TMKQLAllocator<ui8>> overflow;
+    tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
+
+    CTEST << "=============\nBench Negative Find\n=============" << Endl;
+    {
+        ui64 tuples = 5e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L1] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 8e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L2] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 4e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 128e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[>L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Selected data size = " << selectedBytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    CTEST << Endl;
+} // Y_UNIT_TEST(BenchNegativeFind)
+
+Y_UNIT_TEST(BenchPositiveFindLargeTuple) { // Tuple size > 16
+    TScopedAlloc alloc(__LOCATION__);
+
+    TColumnDesc kc1, kc2, pc1, pc2, pc3, pc4;
 
     kc1.Role = EColumnRole::Key;
     kc1.DataSize = 8;
@@ -275,11 +627,17 @@ Y_UNIT_TEST(BenchPageHashTable_LargeTuple) { // Tuple size > 16
     pc2.Role = EColumnRole::Payload;
     pc2.DataSize = 4;
 
-    std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2};
+    pc3.Role = EColumnRole::Payload;
+    pc3.DataSize = 8;
+
+    pc4.Role = EColumnRole::Payload;
+    pc4.DataSize = 4;
+
+    std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2, pc3, pc4};
 
     auto tl = TTupleLayout::Create(columns);
 
-    const ui64 NTuples1 = 10e6;
+    const ui64 NTuples1 = 64e5;
 
     const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
 
@@ -287,6 +645,8 @@ Y_UNIT_TEST(BenchPageHashTable_LargeTuple) { // Tuple size > 16
     std::vector<ui32> col2(NTuples1, 0);
     std::vector<ui64> col3(NTuples1, 0);
     std::vector<ui32> col4(NTuples1, 0);
+    std::vector<ui64> col5(NTuples1, 0);
+    std::vector<ui32> col6(NTuples1, 0);
 
     std::vector<ui8> res(Tuples1DataBytes + 64, 0);
 
@@ -295,74 +655,504 @@ Y_UNIT_TEST(BenchPageHashTable_LargeTuple) { // Tuple size > 16
         col2[i] = i;
         col3[i] = i;
         col4[i] = i;
+        col5[i] = i;
+        col6[i] = i;
     }
 
-    const ui8* cols[4];
+    const ui8* cols[6];
 
     cols[0] = (ui8*) col1.data();
     cols[1] = (ui8*) col2.data();
     cols[2] = (ui8*) col3.data();
     cols[3] = (ui8*) col4.data();
+    cols[4] = (ui8*) col5.data();
+    cols[5] = (ui8*) col6.data();
 
     std::vector<ui8> colValid1((NTuples1 + 7)/8, ~0);
     std::vector<ui8> colValid2((NTuples1 + 7)/8, ~0);
     std::vector<ui8> colValid3((NTuples1 + 7)/8, ~0);
     std::vector<ui8> colValid4((NTuples1 + 7)/8, ~0);
-    const ui8 *colsValid[4] = {
+    std::vector<ui8> colValid5((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid6((NTuples1 + 7)/8, ~0);
+    const ui8 *colsValid[6] = {
         colValid1.data(),
         colValid2.data(),
         colValid3.data(),
         colValid4.data(),
+        colValid5.data(),
+        colValid6.data(),
     };
 
     std::vector<ui8, TMKQLAllocator<ui8>> overflow;
     tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
 
-    auto NSelected = NTuples1 / 10;
-    auto NSelectedBytes = NSelected * tl->TotalRowSize;
-    auto probes = GetRandomTuples(NSelected, NTuples1, res.data(), tl.Get());
-    auto ht = TPageHashTable::Create(tl.Get());
-
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point buildBegin = std::chrono::steady_clock::now();
-    ht->Build(res.data(), NTuples1);
-    std::chrono::steady_clock::time_point buildEnd = std::chrono::steady_clock::now();
-    ui64 buildUs = std::chrono::duration_cast<std::chrono::microseconds>(buildEnd - buildBegin).count();
-    if (buildUs == 0) buildUs = 1;
-
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point singleFindBegin = std::chrono::steady_clock::now();
+    CTEST << "=============\nLarge Bench Positive Find\n=============" << Endl;
     {
-        auto [hash, key] = probes.front();
-        ht->Apply(hash, key, IncCounter);
-    }
-    std::chrono::steady_clock::time_point singleFindEnd = std::chrono::steady_clock::now();
-    ui64 singleFindNs = std::chrono::duration_cast<std::chrono::nanoseconds>(singleFindEnd - singleFindBegin).count();
-    if (singleFindNs == 0) singleFindNs = 1;
-    UNIT_ASSERT(TUPLE_COUNTER == 1);
+        ui64 tuples = 2e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
 
-    TUPLE_COUNTER = 0;
-    std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
-    for (auto [hash, key]: probes) {
-        ht->Apply(hash, key, IncCounter);
-    }
-    std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
-    ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
-    if (findUs == 0) findUs = 1;
-    UNIT_ASSERT(TUPLE_COUNTER == NSelected);
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
 
-    CTEST << "[Large] Build time for " << NTuples1 << " tuples = " << buildUs << "[microseconds]" << Endl;
-    CTEST << "[Large] Data size = " << Tuples1DataBytes / (1024 * 1024) << "[MB]" << Endl;
-    CTEST << "[Large] Processing speed = " << Tuples1DataBytes / buildUs << "MB/sec" << Endl;
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L1] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 3e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L2] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 2e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 64e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[>L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Selected data size = " << selectedBytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
     CTEST << Endl;
-    CTEST << "[Large] Single find time = " << singleFindNs << "[nanoseconds]" << Endl;
+} // Y_UNIT_TEST(BenchPositiveFindLargeTuple)
+
+Y_UNIT_TEST(BenchNegativeFindLargeTuple) { // Tuple size > 16
+    TScopedAlloc alloc(__LOCATION__);
+
+    TColumnDesc kc1, kc2, pc1, pc2, pc3, pc4;
+
+    kc1.Role = EColumnRole::Key;
+    kc1.DataSize = 8;
+
+    kc2.Role = EColumnRole::Key;
+    kc2.DataSize = 4;
+
+    pc1.Role = EColumnRole::Payload;
+    pc1.DataSize = 8;
+
+    pc2.Role = EColumnRole::Payload;
+    pc2.DataSize = 4;
+
+    pc3.Role = EColumnRole::Payload;
+    pc3.DataSize = 8;
+
+    pc4.Role = EColumnRole::Payload;
+    pc4.DataSize = 4;
+
+    std::vector<TColumnDesc> columns{kc1, kc2, pc1, pc2, pc3, pc4};
+
+    auto tl = TTupleLayout::Create(columns);
+
+    const ui64 NTuples1 = 64e5;
+
+    const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
+
+    std::vector<ui64> col1(NTuples1, 0);
+    std::vector<ui32> col2(NTuples1, 0);
+    std::vector<ui64> col3(NTuples1, 0);
+    std::vector<ui32> col4(NTuples1, 0);
+    std::vector<ui64> col5(NTuples1, 0);
+    std::vector<ui32> col6(NTuples1, 0);
+
+    std::vector<ui8> res(Tuples1DataBytes + 64, 0);
+
+    for (ui32 i = 0; i < NTuples1; ++i) {
+        col1[i] = i;
+        col2[i] = i;
+        col3[i] = i;
+        col4[i] = i;
+        col5[i] = i;
+        col6[i] = i;
+    }
+
+    const ui8* cols[6];
+
+    cols[0] = (ui8*) col1.data();
+    cols[1] = (ui8*) col2.data();
+    cols[2] = (ui8*) col3.data();
+    cols[3] = (ui8*) col4.data();
+    cols[4] = (ui8*) col5.data();
+    cols[5] = (ui8*) col6.data();
+
+    std::vector<ui8> colValid1((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid2((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid3((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid4((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid5((NTuples1 + 7)/8, ~0);
+    std::vector<ui8> colValid6((NTuples1 + 7)/8, ~0);
+    const ui8 *colsValid[6] = {
+        colValid1.data(),
+        colValid2.data(),
+        colValid3.data(),
+        colValid4.data(),
+        colValid5.data(),
+        colValid6.data(),
+    };
+
+    std::vector<ui8, TMKQLAllocator<ui8>> overflow;
+    tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
+
+    CTEST << "=============\nLarge Bench Negative Find\n=============" << Endl;
+    {
+        ui64 tuples = 2e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L1] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 3e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L2] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 2e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[<L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 64e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetNonExistentTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == 0);
+        CTEST << "[>L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Selected data size = " << selectedBytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
     CTEST << Endl;
-    CTEST << "[Large] Massive find time for " << NSelected << " attempts = " << findUs << "[microseconds]" << Endl;
-    CTEST << "[Large] Selected data size = " << NSelectedBytes / (1024 * 1024) << "[MB]" << Endl;
-    CTEST << "[Large] Processing speed = " << NSelectedBytes / (findUs) << "MB/sec" << Endl;
-    CTEST << "-------------------" << Endl;
+} // Y_UNIT_TEST(BenchNegativeFindLargeTuple)
+
+Y_UNIT_TEST(BenchVariableSizedKeyPositiveFind) { // key is variable sized
+    TScopedAlloc alloc(__LOCATION__);
+    std::mt19937 gen(std::random_device{}());
+    const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+
+    TColumnDesc kc1, pc1;
+
+    kc1.Role = EColumnRole::Key;
+    kc1.DataSize = 16;
+    kc1.SizeType = EColumnSizeType::Variable;
+    std::uniform_int_distribution<> distr(kc1.DataSize - 10, kc1.DataSize + 2);
+
+    pc1.Role = EColumnRole::Payload;
+    pc1.DataSize = 4;
+
+    std::vector<TColumnDesc> columns{kc1, pc1};
+
+    auto tl = TTupleLayout::Create(columns);
+
+    const ui64 NTuples1 = 64e5;
+
+    const ui64 Tuples1DataBytes = (tl->TotalRowSize) * NTuples1;
+
+    std::vector<ui32> icol1(1, 0);
+    std::vector<ui8>  scol1;
+    std::vector<ui32> col2(NTuples1, 0);
+
+    std::vector<ui8> res(Tuples1DataBytes + 64, 0);
+
+    std::unordered_set<TString> used;
+    for (ui32 i = 0; i < NTuples1; ++i) {
+        while (true) {
+            ui32 len = distr(gen);
+            TString str(len, 0);
+            for (auto& c: str) {
+                c = alphanum[gen() % (sizeof(alphanum) - 1)];
+            }
+            if (!used.count(str)) {
+                used.insert(str);
+                for (auto c: str) {
+                    scol1.push_back(c);
+                }
+                icol1.push_back(scol1.size());
+                break;
+            }
+        }
+        col2[i] = i;
+    }
+
+    const ui8* cols[3];
+
+    cols[0] = (ui8*) icol1.data();
+    cols[1] = (ui8*) scol1.data();
+    cols[2] = (ui8*) col2.data();
+
+    std::vector<ui8> colValid((NTuples1 + 7)/8, ~0);
+    const ui8 *colsValid[3] = {
+        colValid.data(),
+        nullptr,
+        colValid.data(),
+    };
+
+    std::vector<ui8, TMKQLAllocator<ui8>> overflow;
+    tl->Pack(cols, colsValid, res.data(), overflow, 0, NTuples1);
+
+    CTEST << "=============\nBench Variable sized key Positive Find\n=============" << Endl;
+    {
+        ui64 tuples = 3e3;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L1] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L1] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L1] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L1] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 4e4;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L2] Hash table data size = " << bytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L2] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L2] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L2] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 2e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[<L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[<L3] Selected data size = " << selectedBytes / 1024 << "[KB]" << Endl;
+        CTEST << "[<L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[<L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[<L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
+    {
+        ui64 tuples = 64e5;
+        ui64 bytes = (tl->TotalRowSize) * tuples;
+
+        auto ht = TPageHashTable::Create(tl.Get(), tuples);
+        ht->Build(res.data(), &overflow, tuples);
+
+        auto selected = tuples / 10;
+        auto selectedBytes = selected * tl->TotalRowSize;
+        auto probes = GetRandomTuples(selected, tuples, res.data(), tl.Get());
+
+        std::chrono::steady_clock::time_point findBegin = std::chrono::steady_clock::now();
+        auto count = ht->FindMatches(tl.Get(), probes.data(), overflow, selected);
+        std::chrono::steady_clock::time_point findEnd = std::chrono::steady_clock::now();
+        ui64 findUs = std::chrono::duration_cast<std::chrono::microseconds>(findEnd - findBegin).count();
+        if (findUs == 0) findUs = 1;
+
+        UNIT_ASSERT(count == selected);
+        CTEST << "[>L3] Hash table data size = " << bytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Selected data size = " << selectedBytes / (1024 * 1024) << "[MB]" << Endl;
+        CTEST << "[>L3] Find time for " << selected << " tuples = " << findUs << "[microseconds]" << Endl;
+        CTEST << "[>L3] Find speed = " << selectedBytes / findUs << "[MB/sec]" << Endl;
+        CTEST << "[>L3] Avg find time = " << findUs * 1000 / selected << "[nanoseconds/iter]" << Endl;
+        CTEST << "-------------------" << Endl;
+    }
+
     CTEST << Endl;
-} // Y_UNIT_TEST(BenchPageHashTable_LargeTuple)
+} // Y_UNIT_TEST(BenchVariableSizedKeyPositiveFind)
 
 } // Y_UNIT_TEST_SUITE(PageHashTable)
 

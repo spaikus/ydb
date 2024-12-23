@@ -31,15 +31,16 @@ public:
 public:
     virtual ~TPageHashTable() {};
 
-    // Creates hash table for given layout
-    static THolder<TPageHashTable> Create(const TTupleLayout* layout);
+    // Creates hash table for given layout with given capacity
+    static THolder<TPageHashTable> Create(const TTupleLayout* layout, ui32 capacity);
 
     // Build new hash table on passed data.
     // Data must be presented as a TupleLayout.
-    virtual void Build(const ui8* data, ui32 nItems) = 0;
+    virtual void Build(const ui8* data, const std::vector<ui8, TMKQLAllocator<ui8>>* overflow, ui32 nItems) = 0;
 
-    // Finds matches in hash table and calls onMatch functor
-    virtual void Apply(ui32 hash, const ui8* key, OnMatchCallback* onMatch) = 0;
+    // Finds matches in hash table
+    // This method is temporary. It is expected that this method will return a batch of found tuples
+    virtual ui32 FindMatches(const TTupleLayout* layout, const ui8* data, const std::vector<ui8, TMKQLAllocator<ui8>>& overflow, ui32 nItems) = 0;
 
     // Clears hash table content
     virtual void Clear() = 0;
@@ -50,11 +51,11 @@ public:
 template <typename TTraits>
 class TPageHashTableImpl: public TPageHashTable {
 public:
-    TPageHashTableImpl(const TTupleLayout* layout);
+    TPageHashTableImpl(const TTupleLayout* layout, ui32 capacity);
 
-    void Build(const ui8* data, ui32 nItems) override;
+    void Build(const ui8* data, const std::vector<ui8, TMKQLAllocator<ui8>>* overflow, ui32 nItems) override;
 
-    void Apply(ui32 hash, const ui8* key, OnMatchCallback* onMatch) override;
+    ui32 FindMatches(const TTupleLayout* layout, const ui8* data, const std::vector<ui8, TMKQLAllocator<ui8>>& overflow, ui32 nItems) override;
 
     void Clear() override;
 
@@ -77,6 +78,7 @@ private:
     const TTupleLayout*                     Layout_;       // Tuple layout description
     std::vector<ui8, TMKQLAllocator<ui8>>   Data_;         // Place to store hash table data
     const ui8*                              OriginalData_; // Data passed to build method
+    const std::vector<ui8, TMKQLAllocator<ui8>>*    OriginalOverflow_; // Overflow data passed to build method
 };
 
 
