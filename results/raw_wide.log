@@ -1,0 +1,210 @@
+Warn: library is not a buildable target. Skip it. 64
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/u
+Test command err:
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 3984[KB]
+Time for join = 15[ms]
+Join tuples speed: 259MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 7968[KB]
+Time for join = 40[ms]
+Join tuples speed: 194MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 15937[KB]
+Time for join = 77[ms]
+Join tuples speed: 202MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 39843[KB]
+Time for join = 162[ms]
+Join tuples speed: 240MB/sec
+----------------------------------------
+
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 3984[KB]
+Time for join = 21[ms]
+Join tuples speed: 185MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 7968[KB]
+Time for join = 38[ms]
+Join tuples speed: 204MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 15937[KB]
+Time for join = 77[ms]
+Join tuples speed: 202MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 39843[KB]
+Time for join = 165[ms]
+Join tuples speed: 235MB/sec
+----------------------------------------
+
+
+
+Warn: library is not a buildable target. Skip it. 32
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 2109[KB]
+Time for join = 14[ms]
+Join tuples speed: 147MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 4218[KB]
+Time for join = 26[ms]
+Join tuples speed: 158MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 8437[KB]
+Time for join = 77[ms]
+Join tuples speed: 107MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 21093[KB]
+Time for join = 182[ms]
+Join tuples speed: 113MB/sec
+----------------------------------------
+
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 2109[KB]
+Time for join = 14[ms]
+Join tuples speed: 147MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 4218[KB]
+Time for join = 26[ms]
+Join tuples speed: 158MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 8437[KB]
+Time for join = 54[ms]
+Join tuples speed: 152MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 21093[KB]
+Time for join = 149[ms]
+Join tuples speed: 138MB/sec
+----------------------------------------
+
+
+
+
+Warn: library is not a buildable target. Skip it. 16
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/u
+Test command err:
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 1171[KB]
+Time for join = 14[ms]
+Join tuples speed: 81MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 2343[KB]
+Time for join = 29[ms]
+Join tuples speed: 78MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 57[ms]
+Join tuples speed: 80MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 11718[KB]
+Time for join = 141[ms]
+Join tuples speed: 81MB/sec
+----------------------------------------
+
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 1171[KB]
+Time for join = 13[ms]
+Join tuples speed: 88MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 2343[KB]
+Time for join = 29[ms]
+Join tuples speed: 78MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 73[ms]
+Join tuples speed: 62MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 11718[KB]
+Time for join = 137[ms]
+Join tuples speed: 83MB/sec
+----------------------------------------
+
+
+
+
+Warn: library is not a buildable target. Skip it. 96
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/u
+Test command err:
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 5859[KB]
+Time for join = 19[ms]
+Join tuples speed: 301MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 11718[KB]
+Time for join = 35[ms]
+Join tuples speed: 326MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 23437[KB]
+Time for join = 93[ms]
+Join tuples speed: 246MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 58593[KB]
+Time for join = 213[ms]
+Join tuples speed: 268MB/sec
+----------------------------------------
+
+
+----------------------------------------
+TEST NAME: WideTupleJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 5859[KB]
+Time for join = 25[ms]
+Join tuples speed: 228MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 11718[KB]
+Time for join = 42[ms]
+Join tuples speed: 272MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 23437[KB]
+Time for join = 87[ms]
+Join tuples speed: 263MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 58593[KB]
+Time for join = 214[ms]
+Join tuples speed: 267MB/sec
+----------------------------------------

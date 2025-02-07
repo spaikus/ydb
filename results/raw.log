@@ -1,0 +1,587 @@
+Warn: library is not a buildable target. Skip it.
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test100PercentSelectivityJoin+LLVM-
+Test command err:
+----------------------------------------
+TEST NAME: Test100PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 10[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 20[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 39[ms]
+Join tuples speed: 46MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 98[ms]
+Join tuples speed: 46MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test50PercentSelectivityJoin+LLVM-S
+Test command err:
+----------------------------------------
+TEST NAME: Test50PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 9[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 20[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 37[ms]
+Join tuples speed: 49MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 94[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::RightSkewedJoin-LLVM+SPILLING [GOOD
+Test command err:
+----------------------------------------
+TEST NAME: RightSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 26[ms]
+Join tuples speed: 17MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 39[ms]
+Join tuples speed: 23MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 73[ms]
+Join tuples speed: 25MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 195[ms]
+Join tuples speed: 23MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test20PercentSelectivityJoin-LLVM-S
+Test command err:
+----------------------------------------
+TEST NAME: Test20PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 9[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 19[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 35[ms]
+Join tuples speed: 52MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 83[ms]
+Join tuples speed: 55MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::LeftSkewedJoin-LLVM-SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: LeftSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 10[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 19[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 99[ms]
+Join tuples speed: 18MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 396[ms]
+Join tuples speed: 11MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test100PercentSelectivityJoin-LLVM-
+Test command err:
+----------------------------------------
+TEST NAME: Test100PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 9[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 20[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 46[ms]
+Join tuples speed: 39MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 97[ms]
+Join tuples speed: 47MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test20PercentSelectivityJoin-LLVM+S
+Test command err:
+----------------------------------------
+TEST NAME: Test20PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 7[ms]
+Join tuples speed: 65MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 17[ms]
+Join tuples speed: 53MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 31[ms]
+Join tuples speed: 59MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 83[ms]
+Join tuples speed: 55MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::LeftSkewedJoin+LLVM+SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: LeftSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 10[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 19[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 56[ms]
+Join tuples speed: 32MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 96[ms]
+Join tuples speed: 47MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test20PercentSelectivityJoin+LLVM-S
+Test command err:
+----------------------------------------
+TEST NAME: Test20PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 7[ms]
+Join tuples speed: 65MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 14[ms]
+Join tuples speed: 65MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 29[ms]
+Join tuples speed: 63MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 94[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::RightSkewedJoin+LLVM+SPILLING [GOOD
+Test command err:
+----------------------------------------
+TEST NAME: RightSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 16[ms]
+Join tuples speed: 28MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 35[ms]
+Join tuples speed: 26MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 85[ms]
+Join tuples speed: 21MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 192[ms]
+Join tuples speed: 23MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::CrossJoin+LLVM-SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: CrossJoin
+----------------------------------------
+Configuration: Count of lhs elements = 100, Count of rhs elements = 10000, disrt: unique = [0..size]
+Pure data size = 157[KB]
+Time for join = 252[ms]
+Join tuples speed: 626KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 200, Count of rhs elements = 20000, disrt: unique = [0..size]
+Pure data size = 315[KB]
+Time for join = 1005[ms]
+Join tuples speed: 314KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 400, Count of rhs elements = 40000, disrt: unique = [0..size]
+Pure data size = 631[KB]
+Time for join = 3703[ms]
+Join tuples speed: 170KB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::RightSkewedJoin+LLVM-SPILLING [GOOD
+Test command err:
+----------------------------------------
+TEST NAME: RightSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 11[ms]
+Join tuples speed: 41MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 26[ms]
+Join tuples speed: 35MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 65[ms]
+Join tuples speed: 28MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 138[ms]
+Join tuples speed: 33MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::LeftSkewedJoin-LLVM+SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: LeftSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 11[ms]
+Join tuples speed: 41MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 32[ms]
+Join tuples speed: 28MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 41[ms]
+Join tuples speed: 44MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 106[ms]
+Join tuples speed: 43MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::RightSkewedJoin-LLVM-SPILLING [GOOD
+Test command err:
+----------------------------------------
+TEST NAME: RightSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 14[ms]
+Join tuples speed: 32MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 25[ms]
+Join tuples speed: 36MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 51[ms]
+Join tuples speed: 35MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 131[ms]
+Join tuples speed: 34MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test50PercentSelectivityJoin+LLVM+S
+Test command err:
+----------------------------------------
+TEST NAME: Test50PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 7[ms]
+Join tuples speed: 65MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 15[ms]
+Join tuples speed: 61MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 36[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 94[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::CrossJoin-LLVM+SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: CrossJoin
+----------------------------------------
+Configuration: Count of lhs elements = 100, Count of rhs elements = 10000, disrt: unique = [0..size]
+Pure data size = 157[KB]
+Time for join = 621[ms]
+Join tuples speed: 254KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 200, Count of rhs elements = 20000, disrt: unique = [0..size]
+Pure data size = 315[KB]
+Time for join = 2636[ms]
+Join tuples speed: 119KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 400, Count of rhs elements = 40000, disrt: unique = [0..size]
+Pure data size = 631[KB]
+Time for join = 9604[ms]
+Join tuples speed: 65KB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::LeftSkewedJoin+LLVM-SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: LeftSkewedJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size] + [0] * size
+Pure data size = 468[KB]
+Time for join = 10[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size] + [0] * size
+Pure data size = 937[KB]
+Time for join = 19[ms]
+Join tuples speed: 48MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size] + [0] * size
+Pure data size = 1875[KB]
+Time for join = 94[ms]
+Join tuples speed: 19MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size] + [0] * size
+Pure data size = 4687[KB]
+Time for join = 390[ms]
+Join tuples speed: 11MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test100PercentSelectivityJoin-LLVM+
+Test command err:
+----------------------------------------
+TEST NAME: Test100PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 17[ms]
+Join tuples speed: 26MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 20[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 43[ms]
+Join tuples speed: 42MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 115[ms]
+Join tuples speed: 39MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test100PercentSelectivityJoin+LLVM+
+Test command err:
+----------------------------------------
+TEST NAME: Test100PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 10[ms]
+Join tuples speed: 45MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 22[ms]
+Join tuples speed: 41MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 44[ms]
+Join tuples speed: 41MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 105[ms]
+Join tuples speed: 43MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test50PercentSelectivityJoin-LLVM+S
+Test command err:
+----------------------------------------
+TEST NAME: Test50PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 9[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 18[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 35[ms]
+Join tuples speed: 52MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 82[ms]
+Join tuples speed: 55MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test20PercentSelectivityJoin+LLVM+S
+Test command err:
+----------------------------------------
+TEST NAME: Test20PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 6[ms]
+Join tuples speed: 76MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 25[ms]
+Join tuples speed: 36MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 28[ms]
+Join tuples speed: 65MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 77[ms]
+Join tuples speed: 59MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::Test50PercentSelectivityJoin-LLVM-S
+Test command err:
+----------------------------------------
+TEST NAME: Test50PercentSelectivityJoin
+----------------------------------------
+Configuration: Count of lhs elements = 5000, Count of rhs elements = 25000, disrt: unique = [0..size]
+Pure data size = 468[KB]
+Time for join = 8[ms]
+Join tuples speed: 57MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 10000, Count of rhs elements = 50000, disrt: unique = [0..size]
+Pure data size = 937[KB]
+Time for join = 18[ms]
+Join tuples speed: 50MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 20000, Count of rhs elements = 100000, disrt: unique = [0..size]
+Pure data size = 1875[KB]
+Time for join = 37[ms]
+Join tuples speed: 49MB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 50000, Count of rhs elements = 250000, disrt: unique = [0..size]
+Pure data size = 4687[KB]
+Time for join = 88[ms]
+Join tuples speed: 52MB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::CrossJoin-LLVM-SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: CrossJoin
+----------------------------------------
+Configuration: Count of lhs elements = 100, Count of rhs elements = 10000, disrt: unique = [0..size]
+Pure data size = 157[KB]
+Time for join = 227[ms]
+Join tuples speed: 695KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 200, Count of rhs elements = 20000, disrt: unique = [0..size]
+Pure data size = 315[KB]
+Time for join = 944[ms]
+Join tuples speed: 334KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 400, Count of rhs elements = 40000, disrt: unique = [0..size]
+Pure data size = 631[KB]
+Time for join = 3717[ms]
+Join tuples speed: 169KB/sec
+----------------------------------------
+------- [TM] {CFLAGS=-DMKQL_DISABLE_CODEGEN, default-linux-x86_64, release} yql/essentials/minikql/comp_nodes/llvm14/ut/unittest >> TMiniKQLGraceJoinTest::CrossJoin+LLVM+SPILLING [GOOD]
+Test command err:
+----------------------------------------
+TEST NAME: CrossJoin
+----------------------------------------
+Configuration: Count of lhs elements = 100, Count of rhs elements = 10000, disrt: unique = [0..size]
+Pure data size = 157[KB]
+Time for join = 560[ms]
+Join tuples speed: 281KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 200, Count of rhs elements = 20000, disrt: unique = [0..size]
+Pure data size = 315[KB]
+Time for join = 2514[ms]
+Join tuples speed: 125KB/sec
+----------------------------------------
+Configuration: Count of lhs elements = 400, Count of rhs elements = 40000, disrt: unique = [0..size]
+Pure data size = 631[KB]
+Time for join = 9895[ms]
+Join tuples speed: 63KB/sec
+----------------------------------------
+
+Total 1 suite:
+        1 - GOOD
+Total 24 tests:
+        24 - GOOD
+Ok
