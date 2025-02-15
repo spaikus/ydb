@@ -316,6 +316,7 @@ struct TCallableComputationNodeBuilderFuncMapFiller {
         {"BlockDecimalMod", &WrapBlockDecimalMod},
         {"ScalarApply", &WrapScalarApply},
         {"BlockMapJoinCore", &WrapBlockMapJoinCore},
+        {"BlockGraceJoinCore", &WrapBlockGraceJoinCore},
         {"MakeHeap", &WrapMakeHeap},
         {"PushHeap", &WrapPushHeap},
         {"PopHeap", &WrapPopHeap},
