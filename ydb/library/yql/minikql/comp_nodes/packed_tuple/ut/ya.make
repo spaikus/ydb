@@ -25,6 +25,7 @@ PEERDIR(
 
 CFLAGS(
     -mprfchw
+    -mavx2
 )
 
 YQL_LAST_ABI_VERSION()

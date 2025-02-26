@@ -19,7 +19,7 @@ namespace NKikimr {
 namespace NMiniKQL {
 namespace NPackedTuple {
 
-constexpr ui32 PrefetchBatchSize = 64;  /// TODO
+constexpr ui32 PrefetchBatchSize = 64; /// TODO
 
 template <typename TEqual, typename THash,
           typename TAllocator = TMKQLAllocator<ui8>>
@@ -28,6 +28,7 @@ class TRobinHoodHashBase {
     using iterator = ui8 *;
     using const_iterator = const ui8 *;
 
+  private:
     struct TCellStatus {
         static constexpr ui32 kInvalid = 0;
         static constexpr ui32 kStart = 2;
@@ -70,6 +71,7 @@ class TRobinHoodHashBase {
     static constexpr ui32 kEmbeddedSize = 16;
     static_assert(sizeof(TPSLOutStorage) <= kEmbeddedSize);
 
+  public:
     explicit TRobinHoodHashBase(const TTupleLayout *layout, THash hash = {},
                                 TEqual equal = {})
         : HashLocal(std::move(hash)), EqualLocal(std::move(equal)),
@@ -97,7 +99,6 @@ class TRobinHoodHashBase {
     void operator=(const TRobinHoodHashBase &) = delete;
     void operator=(TRobinHoodHashBase &&) = delete;
 
-  public:
     Y_FORCE_INLINE void Apply(const ui8 *const tuple, const ui8 *const overflow,
                               auto &&onMatch) {
         const ui32 hash = HashLocal(Layout_, tuple, overflow);
@@ -467,7 +468,7 @@ class TRobinHoodHashBase {
                     ? HashLocal(Layout_, GetTuple(cell), Overflow_)
                     : GetPSLOut(cell).Hash;
             const auto ptr = MakeIterator(hash, newData, newCapacityShift);
-            
+
             if (psl.CellStatus.IsList()) {
                 psl.CellStatus.value = TCellStatus::kStart;
                 psl.CellStatus.ToList();

@@ -136,8 +136,8 @@ void TTupleLayoutFallback<NSimd::TSimdFallbackTraits>::Unpack(
 // It is expected that key columns layout is same for lhs and rhs
 Y_FORCE_INLINE
 bool CompareKeys(
-    const TTupleLayout* lhsLayout, const ui8* lhsData, const std::vector<ui8, TMKQLAllocator<ui8>>& lhsOverflow,
-    const TTupleLayout* rhsLayout, const ui8* rhsData, const std::vector<ui8, TMKQLAllocator<ui8>>& rhsOverflow)
+    const TTupleLayout* lhsLayout, const ui8* lhsData, const ui8 *const lhsOverflow,
+    const TTupleLayout* rhsLayout, const ui8* rhsData, const ui8 *const rhsOverflow)
 {
     const ui8* lhsKey = lhsData + lhsLayout->KeyColumnsOffset;
     const ui8* rhsKey = rhsData + rhsLayout->KeyColumnsOffset;
@@ -187,9 +187,9 @@ bool CompareKeys(
             if (!std::equal(lhsKey + 1 + 2 * sizeof(ui32), lhsKey + 1 + 2 * sizeof(ui32) + lhsPrefixSize, rhsKey + 1 + 2 * sizeof(ui32))) {
                 return false;
             }
-            auto lhsBit = lhsOverflow.begin() + lhsOverflowOffset;
-            auto lhsEit = lhsOverflow.begin() + lhsOverflowOffset + lhsOverflowSize;
-            auto rhsBit = rhsOverflow.begin() + rhsOverflowOffset;
+            auto lhsBit = lhsOverflow + lhsOverflowOffset;
+            auto lhsEit = lhsOverflow + lhsOverflowOffset + lhsOverflowSize;
+            auto rhsBit = rhsOverflow + rhsOverflowOffset;
             if (!std::equal(lhsBit, lhsEit, rhsBit)) {
                 return false;
             }
