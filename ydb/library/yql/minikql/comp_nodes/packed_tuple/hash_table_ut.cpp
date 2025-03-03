@@ -3,6 +3,7 @@
 #include <chrono>
 #include <random>
 #include <vector>
+#include <fstream>
 
 #include <util/stream/null.h>
 #include <util/system/compiler.h>
@@ -26,23 +27,8 @@ static volatile bool IsVerbose = true;
 
 namespace {
 
-struct TTupleEqual {
-    bool operator()(const TTupleLayout *layout, const ui8 *lhsRow,
-                    const ui8 *lhsOverflow, const ui8 *rhsRow,
-                    const ui8 *rhsOverflow) {
-        return layout->KeysEqual(lhsRow, lhsOverflow, rhsRow, rhsOverflow);
-    }
-};
-
-struct TTupleHash {
-    ui32 operator()(const TTupleLayout * /*layout*/, const ui8 *tuple,
-                    const ui8 * /*overflow*/) {
-        return ((const ui32 *)tuple)[0];
-    }
-};
-
-using TRobinHoodTable =
-    TRobinHoodHashBase<TTupleEqual, TTupleHash, TMKQLAllocator<ui8>>;
+using TRobinHoodTableList = TRobinHoodHashBase<false>;
+using TRobinHoodTableSeq = TRobinHoodHashBase<true>;
 
 using TPageTable = TPageHashTableImpl<NSimd::TSimdAVX2Traits>;
 
@@ -311,18 +297,30 @@ template <typename... Args> class TBenchmark {
         ui64 coldBuildTime = 0;
         ui64 warmBuildTime = 0;
         ui64 lookupTime = 0;
+        ui64 memUsed = 0;
     };
+
+    friend std::ostream &operator<<(std::ostream &out, TResult res) {
+        out << res.coldBuildTime << ',' << res.warmBuildTime << ','
+            << res.lookupTime << ',' << res.memUsed;
+        return out;
+    }
 
     struct TInfo {
         ui64 uniqueMatches = 0;
         ui64 totalMatches = 0;
+        ui32 checksum = 0;
     };
 
     static constexpr auto kBuildLookupSize = std::array{
-        std::pair<ui32, ui32>{10000, 40000},
-        std::pair<ui32, ui32>{100000, 400000},
-        std::pair<ui32, ui32>{1000000, 4000000},
-        // std::pair<ui32, ui32>{5000000, 20000000},
+        std::pair<ui32, ui32>{10000, 2000000},
+        std::pair<ui32, ui32>{40000, 2000000},
+        std::pair<ui32, ui32>{100000, 2000000},
+        std::pair<ui32, ui32>{400000, 2000000},
+        std::pair<ui32, ui32>{1000000, 2000000},
+        std::pair<ui32, ui32>{2000000, 2000000},
+        std::pair<ui32, ui32>{4000000, 2000000},
+        std::pair<ui32, ui32>{8000000, 2000000},
     };
     static constexpr ui32 kIters = 3;
 
@@ -334,13 +332,14 @@ template <typename... Args> class TBenchmark {
     };
 
     TBenchmark(ui32 payloadSize, const char *benchName)
-        : PayloadSize_(payloadSize), BenchName_(benchName) {
+        : Alloc_(__LOCATION__), PayloadSize_(payloadSize),
+          BenchName_(benchName) {
         Init();
     }
 
     void Register(TConfig config) { Configs_.emplace_back(std::move(config)); }
 
-    void Run() {
+    void Run(bool toCSV = false) {
         CTEST << "================================\n";
         CTEST << "-------- " << BenchName_ << " --------\n";
         CTEST << "Hash tables being benchmarked:\n";
@@ -353,6 +352,13 @@ template <typename... Args> class TBenchmark {
         for (const auto &config : Configs_) {
             CTEST << "----------------";
 
+            std::ofstream out;
+            if (toCSV) {
+                const auto dir = std::filesystem::path(__FILE__).parent_path() /= "results";
+                std::filesystem::create_directory(dir);
+                out = std::ofstream(dir.string() + "/" + BenchName_ + "_" + config.name + ".csv");
+            }
+    
             for (const auto [buildSize, lookupSize] : kBuildLookupSize) {
                 auto [buildKeys, buildOverflow] =
                     GenData(buildSize, config.buildKeyDistribution);
@@ -362,9 +368,17 @@ template <typename... Args> class TBenchmark {
                     GetInfo(config.buildKeyDistribution.Max(), buildKeys.data(),
                             buildSize, lookupKeys.data(), lookupSize);
 
-                RunTest(config, info, buildKeys.data(), buildOverflow.data(),
+                const auto results = RunTest(config, info, buildKeys.data(), buildOverflow.data(),
                         buildSize, lookupKeys.data(), lookupOverflow.data(),
                         lookupSize);
+
+                if (toCSV) {
+                    out << buildSize << ',' << lookupSize << ',';
+                    for (size_t ind = 0; ind != results.size(); ++ind) {
+                        out << results[ind] << (ind + 1 == results.size() ? '\n' : ',');
+                    }
+                    out << std::flush;
+                }
             }
         }
     }
@@ -405,9 +419,8 @@ template <typename... Args> class TBenchmark {
         };
 
         const ui64 DataSize = Layout_->TotalRowSize * size;
-        auto result = std::make_pair(
-            std::vector<ui8, TMKQLAllocator<ui8>>(DataSize + 64, 0),
-            std::vector<ui8, TMKQLAllocator<ui8>>{});
+        auto result = std::make_pair(std::vector<ui8>(DataSize + 64, 0),
+                                     std::vector<ui8, TMKQLAllocator<ui8>>{});
         Layout_->Pack(cols, colsValid, result.first.data(), result.second, 0,
                       size);
 
@@ -428,6 +441,8 @@ template <typename... Args> class TBenchmark {
 
         TInfo result;
         for (ui32 ind = 0; ind != rightSize; ++ind) {
+            const ui32 hash =
+                ReadUnaligned<ui32>(rightData + ind * Layout_->TotalRowSize);
             const ui32 key =
                 ReadUnaligned<ui32>(rightData + ind * Layout_->TotalRowSize +
                                     Layout_->KeyColumnsOffset);
@@ -440,37 +455,38 @@ template <typename... Args> class TBenchmark {
                 result.uniqueMatches++;
             }
             result.totalMatches += keyCount[key];
+            result.checksum += keyCount[key] * hash;
         }
 
         return result;
     }
 
-    void RunTest(const TConfig &config, const TInfo info, ui8 *buildKeys,
+    auto RunTest(const TConfig &config, const TInfo info, ui8 *buildKeys,
                  ui8 *buildOverflow, ui32 buildSize, ui8 *lookupKeys,
                  ui8 *lookupOverflow, ui32 lookupSize) {
-        CTEST << "--------" << Endl;
-
-        CTEST << "Params\t" << " config: " << config.name
-              << ", keys: " << buildSize << ", lookups: " << lookupSize << Endl;
-
-        CTEST << "Info\t" << " unique matches: " << info.uniqueMatches
-              << ", total matches: " << info.totalMatches << Endl;
-
-        CTEST << "\nTime measurements (us):" << Endl;
-
         std::array<TResult, sizeof...(Args)> results;
         ApplyNumbered([&]<class Arg, size_t Ind> {
             results[Ind] =
                 RunArgTest<Arg>(buildKeys, buildOverflow, buildSize, lookupKeys,
-                                lookupOverflow, lookupSize, info.totalMatches);
+                                lookupOverflow, lookupSize, info);
         });
 
+        CTEST << "--------" << Endl;
+        CTEST << "Params\t" << " config: " << config.name
+              << ", keys: " << buildSize << ", lookups: " << lookupSize << Endl;
+        CTEST << "Info\t" << " unique matches: " << info.uniqueMatches
+              << ", total matches: " << info.totalMatches << Endl;
+        CTEST << "\nTime measurements (us):" << Endl;
         PrintResult("1st build", results,
                     [](TResult arg) { return arg.coldBuildTime; });
         PrintResult("2nd build", results,
                     [](TResult arg) { return arg.warmBuildTime; });
         PrintResult("lookups", results,
                     [](TResult arg) { return arg.lookupTime; });
+        PrintResult("memory KiB", results,
+                    [](TResult arg) { return arg.memUsed; });
+
+        return results;
     }
 
     void PrintResult(const std::string &name,
@@ -496,10 +512,12 @@ template <typename... Args> class TBenchmark {
     template <typename Arg>
     TResult RunArgTest(ui8 *buildKeys, ui8 *buildOverflow, ui32 buildSize,
                        ui8 *lookupKeys, ui8 *lookupOverflow, ui32 lookupSize,
-                       size_t expectedMatches) {
+                       TInfo info) {
         TResult result;
 
         for (ui32 iter = 0; iter != kIters; ++iter) {
+            UNIT_ASSERT_LE(Alloc_.GetUsed(), 1024);
+
             Arg arg(Layout_.Get());
 
             result.coldBuildTime += Measure(
@@ -507,19 +525,25 @@ template <typename... Args> class TBenchmark {
             arg.Clear();
             result.warmBuildTime += Measure(
                 [&] { arg.Build(buildKeys, buildOverflow, buildSize); });
+            result.memUsed = Alloc_.GetUsed() / 1024;
 
-            size_t matches = 0;
+            ui64 matches = 0;
+            ui32 checksum = 0;
             result.lookupTime = Measure([&] {
                 ui8 *const end =
                     lookupKeys + Layout_->TotalRowSize * lookupSize;
                 for (ui8 *it = lookupKeys; it != end;
                      it += Layout_->TotalRowSize) {
-                    arg.Apply(it, lookupOverflow, [&](...) { ++matches; });
+                    arg.Apply(it, lookupOverflow, [&](const ui8 *const row) {
+                        ++matches;
+                        checksum += ReadUnaligned<ui32>(row);
+                    });
                 }
             });
             arg.Clear();
 
-            UNIT_ASSERT_EQUAL(matches, expectedMatches);
+            UNIT_ASSERT_EQUAL(matches, info.totalMatches);
+            UNIT_ASSERT_EQUAL(checksum, info.checksum);
         }
 
         result.coldBuildTime /= kIters;
@@ -556,70 +580,80 @@ template <typename... Args> class TBenchmark {
     }
 
   private:
+    TScopedAlloc Alloc_;
+
     ui32 PayloadSize_;
     const char *BenchName_;
 
     THolder<TTupleLayout> Layout_;
 
-    TVector<TConfig> Configs_;
+    std::vector<TConfig> Configs_;
 };
 
 } // namespace
 
 using TTablesBenchmark = TBenchmark<
-    TBloomedTable<TRobinHoodTable, TBloomFilter<TMKQLAllocator<ui64>>>,
-    TBloomedTable<TRobinHoodTable, TBloomFilter2<TMKQLAllocator<ui16>>>,
-    TRobinHoodTable, TNeumannHashTable, TPageTable>;
+// TRobinHoodTableList, 
+TRobinHoodTableSeq,
+ TNeumannHashTable, TPageTable>;
 
 // -----------------------------------------------------------------
 Y_UNIT_TEST_SUITE(HashTable) {
 
     Y_UNIT_TEST(TablesBenchmarkUniform) {
-        TScopedAlloc alloc(__LOCATION__);
-
         TUniformDistribution uni1M(0, 999999);
         TUniformDistribution uni1B(0, 999999999); /// oof, info may take some
 
         auto benchmark = TTablesBenchmark(0, Name_);
 
         benchmark.Register({"uniform 1M", uni1M, uni1M});
-        benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
+        // benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
         benchmark.Register({"uniform 1B, 1M", uni1B, uni1M});
         benchmark.Register({"uniform 1B", uni1B, uni1B});
 
-        benchmark.Run();
+        // benchmark.Run(true);
     }
 
-    Y_UNIT_TEST(TablesBenchmarkNormal) {
-        TScopedAlloc alloc(__LOCATION__);
+    Y_UNIT_TEST(TablesBenchmarkUniformPayloaded) {
+        TUniformDistribution uni1M(0, 999999);
+        TUniformDistribution uni1B(0, 999999999); /// oof, info may take some
 
+        auto benchmark = TTablesBenchmark(21, Name_);
+
+        benchmark.Register({"uniform 1M", uni1M, uni1M});
+        // benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
+        benchmark.Register({"uniform 1B, 1M", uni1B, uni1M});
+        benchmark.Register({"uniform 1B", uni1B, uni1B});
+
+        // benchmark.Run(true);
+    }
+
+    Y_UNIT_TEST(TablesBenchmarkNormalPayloaded) {
         TNormalDistribution norm1M(1000000 / 2, 1000000 / 6);
         TNormalDistribution norm1B(1000000000 / 2,
                                    1000000000 / 6); /// oof, info may take some
 
-        auto benchmark = TTablesBenchmark(0, Name_);
+        auto benchmark = TTablesBenchmark(21, Name_);
 
         benchmark.Register({"norm 1M", norm1M, norm1M});
-        benchmark.Register({"norm 1M, 1B", norm1M, norm1B});
+        // benchmark.Register({"norm 1M, 1B", norm1M, norm1B});
         benchmark.Register({"norm 1B, 1M", norm1M, norm1B});
         benchmark.Register({"norm 1B", norm1B, norm1B});
 
-        benchmark.Run();
+        // benchmark.Run(true);
     }
 
-    Y_UNIT_TEST(TablesBenchmarkSingleMix) {
-        TScopedAlloc alloc(__LOCATION__);
-
+    Y_UNIT_TEST(TablesBenchmarkSingleMixPayloaded) {
         TSingleValueDistribution single(1);
         TUniformDistribution uni1M(0, 999999);
         TMixtureDistribution mixSingleUni1B(single, uni1M, 0.1);
 
-        auto benchmark = TTablesBenchmark(0, Name_);
+        auto benchmark = TTablesBenchmark(21, Name_);
 
         benchmark.Register({"uniform 1M, mix", uni1M, mixSingleUni1B});
         benchmark.Register({"mix, uniform 1M", mixSingleUni1B, uni1M});
 
-        benchmark.Run();
+        benchmark.Run(true);
     }
 
 } // Y_UNIT_TEST_SUITE(RobinHoodCheck)
