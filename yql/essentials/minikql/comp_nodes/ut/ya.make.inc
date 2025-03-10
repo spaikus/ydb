@@ -24,6 +24,7 @@ SET(ORIG_SOURCES
     mkql_block_compress_ut.cpp
     mkql_block_exists_ut.cpp
     mkql_block_skiptake_ut.cpp
+    mkql_block_grace_join_ut.cpp
     mkql_block_map_join_ut_utils.cpp
     mkql_block_map_join_ut.cpp
     mkql_block_top_sort_ut.cpp
@@ -79,6 +80,7 @@ PEERDIR(
     yql/essentials/public/udf/arrow
     yql/essentials/public/udf/service/exception_policy
     yql/essentials/sql/pg_dummy
+    ydb/library/yql/minikql/comp_nodes/packed_tuple
 )
 
 IF (ARCH_X86_64)
