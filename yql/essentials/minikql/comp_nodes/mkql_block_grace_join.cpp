@@ -4,6 +4,7 @@
 #include <yql/essentials/minikql/computation/mkql_block_impl.h>
 #include <yql/essentials/minikql/computation/block_layout_converter.h>
 #include <yql/essentials/minikql/computation/mkql_computation_node_holders_codegen.h>
+#include <yql/essentials/minikql/computation/mkql_resource_meter.h>
 
 #include <yql/essentials/minikql/invoke_builtins/mkql_builtins.h>
 #include <yql/essentials/minikql/mkql_node_cast.h>
@@ -13,9 +14,13 @@
 
 #include <util/generic/serialized_enum.h>
 
+#include <chrono>
+
 namespace NKikimr::NMiniKQL {
 
 namespace {
+
+using namespace std::chrono_literals;
 
 // -------------------------------------------------------------------
 [[maybe_unused]] constexpr size_t KB = 1024;
@@ -204,7 +209,7 @@ private:
     bool                RightIsFinished_{false};
     IBlockLayoutConverter::TPtr RightConverter_;
 
-    static constexpr size_t MEMORY_THRESHOLD{L2_CACHE_SIZE / 2}; // heuristic value of maximum data size for hash table
+    static constexpr size_t MEMORY_THRESHOLD{2 * L2_CACHE_SIZE}; // heuristic value of maximum data size for hash table
 };
 
 // -------------------------------------------------------------------
@@ -292,7 +297,8 @@ private:
     
     private:
         bool HasEnoughMemory() const {
-            return ProbePackedInput.Overflow.size() < ProbePackedInput.Overflow.capacity() * 4 / 5;
+            return ProbePackedInput.Overflow.capacity() == 0
+                   || ProbePackedInput.Overflow.size() < ProbePackedInput.Overflow.capacity() * 4 / 5;
         }
 
     public:
@@ -394,15 +400,15 @@ public:
         }
         joinState.BuildPackedInput.Overflow.reserve(
             CalculateExpectedOverflowSize(BuildConverter_->GetTupleLayout(), nTuplesBuild));
-        
+
         size_t nTuplesProbe = CalcMaxBlockLength(*rightItemTypesArg) * 4; // Lets assume that average join selectivity eq 25%, so we have to fetch 4 blocks in general to fill output properly
         joinState.ProbePackedInput.Overflow.reserve(
             CalculateExpectedOverflowSize(ProbeConverter_->GetTupleLayout(), nTuplesProbe));
-        
+
         // Reserve memory for probe input
         joinState.ProbePackedInput.PackedTuples.reserve(
             CalcMaxBlockLength(*rightItemTypesArg) * ProbeConverter_->GetTupleLayout()->TotalRowSize);
-        
+
         // Reserve memory for output
         joinState.BuildPackedOutput.reserve(
             CalcMaxBlockLength(*leftItemTypesArg) * BuildConverter_->GetTupleLayout()->TotalRowSize);
@@ -608,6 +614,9 @@ public:
 
 private:
     NUdf::EFetchStatus WideFetch(NUdf::TUnboxedValue* output, ui32 width) {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+        NUdf::EFetchStatus returnStatus{NUdf::EFetchStatus::Finish};
+
         switch (GetMode()) {
         case TMode::Start:
         {
@@ -628,11 +637,13 @@ private:
                 hashJoin.BuildIndex();
 
                 SwitchModeTo(TMode::HashJoin);
-                return NUdf::EFetchStatus::Yield; // return from WideFetch to switch to the next state
+                returnStatus = NUdf::EFetchStatus::Yield; // return from WideFetch to switch to the next state
+                break;
             } else {
                 Y_ASSERT(false); // Grace hash join not implemented yet
                 SwitchModeTo(TMode::GraceHashJoin);
-                return NUdf::EFetchStatus::Yield;
+                returnStatus = NUdf::EFetchStatus::Yield;
+                break;
             }
         }
         break;
@@ -643,7 +654,8 @@ private:
             if (status == NUdf::EFetchStatus::Ok) {
                 hashJoin.FillOutput(output, width);
             }
-            return status;
+            returnStatus = status;
+            break;
         }
         break;
         case TMode::GraceHashJoin:
@@ -653,7 +665,11 @@ private:
         break;
         }
 
-        Y_UNREACHABLE();
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        ui64 spent = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+        globalResourceMeter.UpdateSpentTime("BlockGraceJoin:HashJoin", spent);
+        globalResourceMeter.UpdateConsumptedMemory("BlockGraceJoin:HashJoin", TlsAllocState->GetUsed());
+        return returnStatus;
     }
 
 private:
