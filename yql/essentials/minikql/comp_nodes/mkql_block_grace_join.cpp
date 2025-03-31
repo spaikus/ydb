@@ -1,6 +1,8 @@
 #include "mkql_block_grace_join.h"
 
+#include <yql/essentials/minikql/mkql_type_builder.h>
 #include <yql/essentials/minikql/computation/mkql_block_builder.h>
+#include <yql/essentials/minikql/computation/mkql_block_reader.h>
 #include <yql/essentials/minikql/computation/mkql_block_impl.h>
 #include <yql/essentials/minikql/computation/block_layout_converter.h>
 #include <yql/essentials/minikql/computation/mkql_computation_node_holders_codegen.h>
@@ -13,6 +15,10 @@
 #include <ydb/library/yql/minikql/comp_nodes/packed_tuple/robin_hood_table.h>
 
 #include <util/generic/serialized_enum.h>
+
+#include <yql/essentials/public/udf/arrow/util.h>
+#include <arrow/array/data.h>
+#include <arrow/datum.h>
 
 #include <chrono>
 
@@ -30,11 +36,15 @@ using namespace std::chrono_literals;
 [[maybe_unused]] constexpr size_t L3_CACHE_SIZE =  16 * MB;
 
 // -------------------------------------------------------------------
-size_t CalcMaxBlockLength(const TVector<TType*>& items) {
+size_t CalcMaxBlockLength(const TVector<TType*>& items, bool isBlockType = true) {
     return CalcBlockLen(std::accumulate(items.cbegin(), items.cend(), 0ULL,
-        [](size_t max, const TType* type) {
-            const TType* itemType = AS_TYPE(TBlockType, type)->GetItemType();
-            return std::max(max, CalcMaxBlockItemSize(itemType));
+        [isBlockType](size_t max, const TType* type) {
+            if (isBlockType) {
+                const TType* itemType = AS_TYPE(TBlockType, type)->GetItemType();
+                return std::max(max, CalcMaxBlockItemSize(itemType));
+            } else {
+                return std::max(max, CalcMaxBlockItemSize(type));
+            }
         }));
 }
 
@@ -158,13 +168,22 @@ public:
     }
 
     TStatus GetStatus() {
-        if (LeftIsFinished_ || RightIsFinished_) {
-            return TStatus::StreamFinished;
-        }
         if (LeftEstimatedSize_ >= MEMORY_THRESHOLD && RightEstimatedSize_ >= MEMORY_THRESHOLD) {
             return TStatus::MemoryLimitExceeded;
         }
+        if ((LeftIsFinished_ && RightIsFinished_)
+            ||(LeftIsFinished_ && RightEstimatedSize_ >= MEMORY_THRESHOLD)
+            || (RightIsFinished_ && LeftEstimatedSize_ >= MEMORY_THRESHOLD))
+        {
+            return TStatus::StreamFinished;
+        }
         return TStatus::Unknown;
+    }
+
+    std::pair<ui32, ui32> GetPayloadSizes() const {
+        return {
+            LeftConverter_->GetTupleLayout()->PayloadSize,
+            RightConverter_->GetTupleLayout()->PayloadSize};
     }
 
     // After the method is called FetchStreams cannot be called anymore
@@ -213,6 +232,93 @@ private:
 };
 
 // -------------------------------------------------------------------
+// This is storage for payload columns used when payload part of a tuple is big.
+// So we don't want to carry this useless data during conversion and join algorithm.
+// This storage can save some block and restore payload by index array.
+class TExternalPayloadStorage : public TComputationValue<TExternalPayloadStorage> {
+private:
+    using TBase = TComputationValue<TExternalPayloadStorage>;
+    using TBlock = TTempJoinStorage::TBlock;
+
+public:
+    TExternalPayloadStorage(
+        TMemoryUsageInfo*       memInfo,
+        TComputationContext&    ctx,
+        const TVector<TType*>&  payloadItemTypes
+    )
+        : TBase(memInfo)
+    {
+        const auto& pgBuilder = ctx.Builder->GetPgBuilder();
+        auto maxBlockLen = CalcMaxBlockLength(payloadItemTypes, false);
+
+        for (size_t i = 0; i < payloadItemTypes.size(); i++) {
+            Builders_.push_back(MakeArrayBuilder(
+                TTypeInfoHelper(), payloadItemTypes[i], ctx.ArrowMemoryPool, maxBlockLen /* TODO: fix this size */, &pgBuilder));
+        }
+
+        // Init indirection indexes datum only once
+        auto ui64Type = ctx.TypeEnv.GetUi64Lazy();
+        auto maxBufferSize = CalcBlockLen(CalcMaxBlockItemSize(ui64Type));
+        std::shared_ptr<arrow::DataType> type;
+        ConvertArrowType(ui64Type, type);
+        std::shared_ptr<arrow::Buffer> nullBitmap;
+        auto dataBuffer = NUdf::AllocateResizableBuffer(sizeof(ui64) * maxBufferSize, &ctx.ArrowMemoryPool);
+        IndirectionIndexes = arrow::ArrayData::Make(std::move(type), maxBufferSize, {std::move(nullBitmap), std::move(dataBuffer)});
+    }
+
+    ui32 Size() const {
+        return PayloadColumnsStorage_.size();
+    }
+
+    void AddBlock(TBlock&& block) {
+        PayloadColumnsStorage_.push_back(std::move(block));
+    }
+
+    void Clear() {
+        PayloadColumnsStorage_.clear();
+    }
+
+    TVector<arrow::Datum> RestorePayload(const arrow::Datum& indexes, ui32 length) {
+        auto rawIndexes = indexes.array()->GetMutableValues<ui64>(1);
+
+        TVector<TVector<ui64>> mapping(Size());
+        for (size_t i = 0; i < length; ++i) {
+            auto blockIndex = static_cast<ui32>(rawIndexes[i] >> 32);
+            auto elemIndex = static_cast<ui32>(rawIndexes[i] & 0xFFFFFFFF);
+
+            mapping[blockIndex].push_back(elemIndex);
+        }
+
+        TVector<arrow::Datum> result;
+        for (size_t i = 0; i < Builders_.size(); ++i) {
+            auto& builder = Builders_[i];
+
+            for (size_t blockIndex = 0; blockIndex < mapping.size(); ++blockIndex) {
+                const auto& blockIndexes = mapping[blockIndex];
+                if (blockIndexes.empty()) {
+                    continue;
+                }
+
+                const auto& array = PayloadColumnsStorage_[blockIndex].Columns[i].array();
+                IArrayBuilder::TArrayDataItem item = { array.get(), 0 };
+                builder->AddMany(&item, 1, blockIndexes.data(), blockIndexes.size());
+            }
+
+            result.push_back(builder->Build(false));
+        }
+
+        return result;
+    }
+
+public:
+    arrow::Datum IndirectionIndexes;
+
+private:
+    TVector<TBlock> PayloadColumnsStorage_;
+    TVector<std::unique_ptr<IArrayBuilder>> Builders_;
+};
+
+// -------------------------------------------------------------------
 class THashJoin : public TComputationValue<THashJoin> {
 private:
     using TBase = TComputationValue<THashJoin>;
@@ -222,13 +328,14 @@ private:
     struct TState : public TBlockState {
     public:
         TState(
-            TMemoryUsageInfo*       memInfo,
-            const TVector<TType*>*  resultItemTypes,
-            IBlockLayoutConverter*  buildConverter,
-            IBlockLayoutConverter*  probeConverter,
-            const TVector<ui32>&    leftIOMap,
-            const TVector<ui32>&    rightIOMap,
-            bool                    wasSwapped
+            TMemoryUsageInfo*           memInfo,
+            const TVector<TType*>*      resultItemTypes,
+            IBlockLayoutConverter*      buildConverter,
+            IBlockLayoutConverter*      probeConverter,
+            const TVector<ui32>&        leftIOMap,
+            const TVector<ui32>&        rightIOMap,
+            TExternalPayloadStorage*    payloadStorage, // can be nullptr
+            bool                        wasSwapped
         )
             : TBlockState(memInfo, resultItemTypes->size())
             , Table(buildConverter->GetTupleLayout())
@@ -239,10 +346,12 @@ private:
             LeftPackedTuple_ = &BuildPackedOutput;
             LeftOverflow_ = &BuildPackedInput.Overflow;
             LeftConverter_ = buildConverter;
+            LeftPayloadStorage_ = nullptr; // there is no external payload storage for build stream
 
             RightPackedTuple_ = &ProbePackedOutput;
             RightOverflow_ = &ProbePackedInput.Overflow;
             RightConverter_ = probeConverter;
+            RightPayloadStorage_ = payloadStorage;
 
             // Check if was swapped.
             // If was not swapped, left stream is build and right is probe
@@ -251,6 +360,7 @@ private:
                 swap(LeftPackedTuple_, RightPackedTuple_);
                 swap(LeftOverflow_, RightOverflow_);
                 swap(LeftConverter_, RightConverter_);
+                swap(LeftPayloadStorage_, RightPayloadStorage_);
             }
         }
 
@@ -262,6 +372,11 @@ private:
             IBlockLayoutConverter::PackResult leftPackResult{std::move(*LeftPackedTuple_), std::move(*LeftOverflow_), OutputRows};
             TVector<arrow::Datum> leftColumns;
             LeftConverter_->Unpack(leftPackResult, leftColumns);
+            if (LeftPayloadStorage_) {
+                auto payload = LeftPayloadStorage_->RestorePayload(leftColumns.back(), OutputRows);
+                leftColumns.pop_back();
+                leftColumns.insert(leftColumns.end(), payload.begin(), payload.end());
+            }
             for (size_t i = 0; i < LeftIOMap_.size(); i++, index++) {
                 Values[index] = holderFactory.CreateArrowBlock(std::move(leftColumns[LeftIOMap_[i]]));
             }
@@ -269,6 +384,11 @@ private:
             IBlockLayoutConverter::PackResult rightPackResult{std::move(*RightPackedTuple_), std::move(*RightOverflow_), OutputRows};
             TVector<arrow::Datum> rightColumns;
             RightConverter_->Unpack(rightPackResult, rightColumns);
+            if (RightPayloadStorage_) {
+                auto payload = RightPayloadStorage_->RestorePayload(rightColumns.back(), OutputRows);
+                rightColumns.pop_back();
+                rightColumns.insert(rightColumns.end(), payload.begin(), payload.end());
+            }
             for (size_t i = 0; i < RightIOMap_.size(); i++, index++) {
                 Values[index] = holderFactory.CreateArrowBlock(std::move(rightColumns[RightIOMap_[i]]));
             }
@@ -282,7 +402,14 @@ private:
         }
 
         bool IsNotFull() const {
-            return OutputRows < MaxLength_ && HasEnoughMemory();
+            // WARNING: we can not properly track the number of output rows due to Apply,
+            // so add some heuristic to prevent overflow.
+            // FIXME: Add iterator in HT and remove Apply to add tuples to output one by one
+            return OutputRows * 5 < MaxLength_ * 4 && HasEnoughMemory();
+        }
+
+        bool HasBlocks() {
+            return Count > 0;
         }
 
         void Reset() {
@@ -293,6 +420,12 @@ private:
             // Do not clear build one, because it is constant for all DoProbe calls
             BuildPackedOutput.clear();
             ProbePackedOutput.clear();
+            if (LeftPayloadStorage_) {
+                LeftPayloadStorage_->Clear();
+            }
+            if (RightPayloadStorage_) {
+                RightPayloadStorage_->Clear();
+            }
         }
     
     private:
@@ -319,11 +452,13 @@ private:
         IBlockLayoutConverter::TPackedTuple*    LeftPackedTuple_;
         IBlockLayoutConverter::TOverflow*       LeftOverflow_;
         const TVector<ui32>&                    LeftIOMap_;
+        TExternalPayloadStorage*                LeftPayloadStorage_; // can be nullptr
 
         IBlockLayoutConverter*                  RightConverter_;
         IBlockLayoutConverter::TPackedTuple*    RightPackedTuple_;
         IBlockLayoutConverter::TOverflow*       RightOverflow_;
         const TVector<ui32>&                    RightIOMap_;
+        TExternalPayloadStorage*                RightPayloadStorage_; // can be nullptr
     };
 
 public:
@@ -346,16 +481,22 @@ public:
         , ResultItemTypes_(resultItemTypes)
     {
         auto& tempStorage = *static_cast<TTempJoinStorage*>(tempStorageValue.AsBoxed().Get());
+        auto [leftPSz, rightPSz] = tempStorage.GetPayloadSizes();
         auto [leftData, rightData] = tempStorage.DetachData();
         auto [isLeftFinished, isRightFinished] = tempStorage.IsFinished(); 
-        if (!isLeftFinished && isRightFinished) { // assume that finished stream has less size than unfinished
+        if ((!isLeftFinished && isRightFinished)
+            || (isLeftFinished && isRightFinished && (leftPSz > rightPSz)))
+        { // assume that finished stream has less size than unfinished
             using std::swap;
             swap(leftStream, rightStream); // so swap them
             swap(leftData, rightData);
             swap(leftItemTypesArg, rightItemTypesArg);
             swap(leftKeyColumns, rightKeyColumns);
+            swap(leftPSz, rightPSz);
             WasSwapped_ = true;
         }
+        // Probe payload is so big, so we have to use indirection index and external payload storage
+        IsPayloadIndirected_ = (rightPSz > PAYLOAD_SIZE_THRESHOLD);
 
         BuildData_ = std::move(leftData);
         BuildKeyColumns_ = leftKeyColumns;
@@ -364,6 +505,7 @@ public:
         ProbeData_ = std::move(rightData);
         ProbeKeyColumns_ = rightKeyColumns;
         ProbeInputs_.resize(rightItemTypesArg->size());
+        ProbeKeyColumnsSet_ = THashSet<ui32>(ProbeKeyColumns_->begin(), ProbeKeyColumns_->end());
 
         // Create converters
         auto pool = &Ctx_.ArrowMemoryPool;
@@ -379,8 +521,26 @@ public:
         BuildConverter_ = MakeBlockLayoutConverter(TTypeInfoHelper(), leftItemTypes, buildRoles, pool);
 
         TVector<TType*> rightItemTypes;
-        for (size_t i = 0; i < rightItemTypesArg->size() - 1; i++) { // ignore last column, because this is block size
-            rightItemTypes.push_back(AS_TYPE(TBlockType, (*rightItemTypesArg)[i])->GetItemType());
+        if (IsPayloadIndirected_) {
+            TVector<TType*> rightPayloadItemTypes;
+            for (size_t i = 0; i < rightItemTypesArg->size() - 1; i++) {
+                if (ProbeKeyColumnsSet_.contains(i)) {
+                    rightItemTypes.push_back(AS_TYPE(TBlockType, (*rightItemTypesArg)[i])->GetItemType());
+                } else {
+                    rightPayloadItemTypes.push_back(AS_TYPE(TBlockType, (*rightItemTypesArg)[i])->GetItemType());
+                }
+            }
+
+            // add indirection index column as payload column to converter
+            auto ui64Type = Ctx_.TypeEnv.GetUi64Lazy();
+            rightItemTypes.push_back(ui64Type);
+
+            // create external payload storage for payload columns
+            ExternalPayloadStorage_ = Ctx_.HolderFactory.Create<TExternalPayloadStorage>(Ctx_, rightPayloadItemTypes);
+        } else {
+            for (size_t i = 0; i < rightItemTypesArg->size() - 1; i++) { // ignore last column, because this is block size
+                rightItemTypes.push_back(AS_TYPE(TBlockType, (*rightItemTypesArg)[i])->GetItemType());
+            }
         }
         TVector<NPackedTuple::EColumnRole> probeRoles(rightItemTypes.size(), NPackedTuple::EColumnRole::Payload);
         for (auto keyCol: *ProbeKeyColumns_) {
@@ -388,9 +548,14 @@ public:
         }
         ProbeConverter_ = MakeBlockLayoutConverter(TTypeInfoHelper(), rightItemTypes, probeRoles, pool);
 
+        // Prepare pointer to external payload storage for Join state
+        auto payloadStorage = IsPayloadIndirected_
+            ? static_cast<TExternalPayloadStorage*>(ExternalPayloadStorage_.AsBoxed().Get())
+            : nullptr;
+
         // Create inner hash join state
         State_ = Ctx_.HolderFactory.Create<TState>(
-            ResultItemTypes_, BuildConverter_.get(), ProbeConverter_.get(), leftIOMap, rightIOMap, WasSwapped_);
+            ResultItemTypes_, BuildConverter_.get(), ProbeConverter_.get(), leftIOMap, rightIOMap, payloadStorage, WasSwapped_);
         auto& joinState = *static_cast<TState*>(State_.AsBoxed().Get());
 
         // Reserve buffers for overflow
@@ -401,19 +566,19 @@ public:
         joinState.BuildPackedInput.Overflow.reserve(
             CalculateExpectedOverflowSize(BuildConverter_->GetTupleLayout(), nTuplesBuild));
 
-        size_t nTuplesProbe = CalcMaxBlockLength(*rightItemTypesArg) * 4; // Lets assume that average join selectivity eq 25%, so we have to fetch 4 blocks in general to fill output properly
+        size_t nTuplesProbe = CalcMaxBlockLength(rightItemTypes, false) * 4; // Lets assume that average join selectivity eq 25%, so we have to fetch 4 blocks in general to fill output properly
         joinState.ProbePackedInput.Overflow.reserve(
             CalculateExpectedOverflowSize(ProbeConverter_->GetTupleLayout(), nTuplesProbe));
 
         // Reserve memory for probe input
         joinState.ProbePackedInput.PackedTuples.reserve(
-            CalcMaxBlockLength(*rightItemTypesArg) * ProbeConverter_->GetTupleLayout()->TotalRowSize);
+            CalcMaxBlockLength(rightItemTypes, false) * ProbeConverter_->GetTupleLayout()->TotalRowSize);
 
         // Reserve memory for output
         joinState.BuildPackedOutput.reserve(
-            CalcMaxBlockLength(*leftItemTypesArg) * BuildConverter_->GetTupleLayout()->TotalRowSize);
+            CalcMaxBlockLength(leftItemTypes, false) * BuildConverter_->GetTupleLayout()->TotalRowSize);
         joinState.ProbePackedOutput.reserve(
-            CalcMaxBlockLength(*rightItemTypesArg) * ProbeConverter_->GetTupleLayout()->TotalRowSize);
+            CalcMaxBlockLength(rightItemTypes, false) * ProbeConverter_->GetTupleLayout()->TotalRowSize);
     }
 
     void BuildIndex() {
@@ -431,6 +596,11 @@ public:
     NUdf::EFetchStatus DoProbe() {
         NUdf::EFetchStatus status{NUdf::EFetchStatus::Finish};
         auto& joinState = *static_cast<TState*>(State_.AsBoxed().Get());
+
+        // If we have some output blocks from previous DoProbe call
+        if (joinState.HasBlocks()) {
+            return NUdf::EFetchStatus::Ok;
+        }
 
         while (joinState.IsNotFull()) {
             if (!IsFinished_) {
@@ -465,15 +635,14 @@ public:
             }
 
             // Convert
-            const auto block = ProbeData_.front();
-            ProbeConverter_->Pack(block.Columns, joinState.ProbePackedInput);
-            ProbeData_.pop_front();
+            PackNextProbeBlock(joinState);
 
             // Do lookup, add result to state
             DoBatchLookup(joinState);
 
             // Clear probe's packed tuples
             // Overflow cant be cleared because output have pointers to it
+            // Also payload block storage can't be cleared too for the same reason
             joinState.ProbePackedInput.PackedTuples.clear();
             joinState.ProbePackedInput.NTuples = 0;
         }
@@ -500,6 +669,50 @@ public:
     }
 
 private:
+    void PackNextProbeBlock(TState& joinState) {
+        const auto& block = ProbeData_.front();
+
+        if (IsPayloadIndirected_) {
+            auto& payloadStorage = *static_cast<TExternalPayloadStorage*>(ExternalPayloadStorage_.AsBoxed().Get());
+
+            auto [keyBlock, payloadBlock] = SplitBlock(block, payloadStorage);
+            ProbeConverter_->Pack(keyBlock.Columns, joinState.ProbePackedInput);
+            payloadStorage.AddBlock(std::move(payloadBlock));
+        } else {
+            ProbeConverter_->Pack(block.Columns, joinState.ProbePackedInput);
+        }
+
+        ProbeData_.pop_front();
+    }
+
+    // Split block on two blocks
+    // Lhs contains all key columns and indirection index, rhs contains all payload columns
+    std::pair<TBlock, TBlock> SplitBlock(const TBlock& block, TExternalPayloadStorage& payloadStorage) {
+        TBlock keyBlock;
+        TBlock payloadBlock;
+        for (size_t i = 0; i < block.Columns.size(); ++i) {
+            const auto& datum = block.Columns[i];
+            if (ProbeKeyColumnsSet_.contains(i)) {
+                keyBlock.Columns.push_back(datum.array());
+            } else {
+                payloadBlock.Columns.push_back(datum.array());
+            }
+        }
+        keyBlock.Size = block.Size;
+        payloadBlock.Size = block.Size;
+
+        // Init index column
+        auto* rawDataBuffer = payloadStorage.IndirectionIndexes.array()->GetMutableValues<ui64>(1);
+        ui32 blockIndex = payloadStorage.Size();
+        for (size_t i = 0; i < keyBlock.Size; ++i) {
+            rawDataBuffer[i] = (static_cast<ui64>(blockIndex) << 32) | i; // indirectional index column has such layout: 32 higher bits for block number and 32 bits for offset in block
+        }
+        // Add index column to fetched key block
+        keyBlock.Columns.push_back(payloadStorage.IndirectionIndexes);
+
+        return {std::move(keyBlock), std::move(payloadBlock)};
+    }
+
     void DoBatchLookup(TState& joinState) {
         auto& ht = joinState.Table;
         auto* buildLayout = BuildConverter_->GetTupleLayout();
@@ -509,7 +722,7 @@ private:
         auto  overflow = joinState.ProbePackedInput.Overflow.data();
 
         for (size_t i = 0; i < nTuples; i++, tuple += probeLayout->TotalRowSize) {
-            ht.Apply(tuple, overflow, [&joinState, buildLayout, probeLayout, tuple](const ui8* foundTuple){
+            ht.Apply(tuple, overflow, [&joinState, buildLayout, probeLayout, tuple](const ui8* foundTuple) {
                 // Copy tuple from build part into output
                 auto prevSize = joinState.BuildPackedOutput.size();
                 joinState.BuildPackedOutput.resize(prevSize + buildLayout->TotalRowSize);
@@ -556,11 +769,16 @@ private:
     TUnboxedValueVector         ProbeInputs_;
     TDeque<TBlock>              ProbeData_;
     const TVector<ui32>*        ProbeKeyColumns_;
+    THashSet<ui32>              ProbeKeyColumnsSet_;
     IBlockLayoutConverter::TPtr ProbeConverter_;
 
     NUdf::TUnboxedValue         State_;
+    NUdf::TUnboxedValue         ExternalPayloadStorage_;
     bool                        WasSwapped_{false}; // was left and right streams swapped
     bool                        IsFinished_{false};
+    bool                        IsPayloadIndirected_{false}; // was external payload storage used
+
+    static constexpr ui32       PAYLOAD_SIZE_THRESHOLD{64}; // if payload size of tuple bigger than PAYLOAD_SIZE_THRESHOLD bytes then BAT should be more efficient than pure TLayput
 };
 
 // -------------------------------------------------------------------
