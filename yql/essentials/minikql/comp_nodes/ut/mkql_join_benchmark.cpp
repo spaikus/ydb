@@ -1,10 +1,11 @@
 #include "mkql_block_map_join_ut_utils.h"
 #include "mkql_computation_node_ut.h"
 
+#include <yql/essentials/minikql/computation/mkql_resource_meter.h>
+#include <yql/essentials/minikql/computation/mock_spiller_factory_ut.h>
+#include <yql/essentials/minikql/mkql_block_grace_join_policy.h>
 #include <yql/essentials/minikql/mkql_node_cast.h>
 #include <yql/essentials/minikql/mkql_type_builder.h>
-#include <yql/essentials/minikql/mkql_block_grace_join_policy.h>
-#include <yql/essentials/minikql/computation/mkql_resource_meter.h>
 
 #include <tuple>
 #include <random>
@@ -219,6 +220,7 @@ NUdf::TUnboxedValue DoBenchBlockJoin(
     Y_ENSURE(joinItemType->IsTuple(), "List item has to be tuple");
 
     const auto graph = setup.BuildGraph(joinNode, {leftList.GetNode(), rightList.GetNode()});
+    graph->GetContext().SpillerFactory = std::make_shared<TMockSpillerFactory>();
     auto& ctx = graph->GetContext();
 
     NUdf::TUnboxedValuePod leftBlockListValue, rightBlockListValue;
@@ -322,6 +324,7 @@ NUdf::TUnboxedValue DoBenchGraceJoin(
     Y_ENSURE(joinItemType->IsTuple(), "List item has to be tuple");
 
     const auto graph = setup.BuildGraph(joinNode, {leftList.GetNode(), rightList.GetNode()});
+    graph->GetContext().SpillerFactory = std::make_shared<TMockSpillerFactory>();
     auto& ctx = graph->GetContext();
 
     graph->GetEntryPoint(0, true)->SetValue(ctx, std::move(leftListValue));
