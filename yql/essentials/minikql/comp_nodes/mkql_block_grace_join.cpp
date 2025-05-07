@@ -1045,7 +1045,7 @@ public:
         const size_t leftTupleSize = leftRowsNum * LeftConverter_->GetTupleLayout()->TotalRowSize;
         const size_t rightTupleSize = rightRowsNum * RightConverter_->GetTupleLayout()->TotalRowSize;
         const size_t minTupleSize = std::min(leftTupleSize, rightTupleSize);
-        constexpr size_t bucketDesiredSize = 4 * L2_CACHE_SIZE;
+        constexpr size_t bucketDesiredSize = 16 * L2_CACHE_SIZE;
 
         BucketsLogNum_ = minTupleSize ? sizeof(size_t) * 8 - std::countl_zero((minTupleSize - 1) / bucketDesiredSize) : 0;
         LeftBuckets_.resize(1u << BucketsLogNum_);

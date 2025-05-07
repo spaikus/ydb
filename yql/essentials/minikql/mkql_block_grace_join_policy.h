@@ -111,6 +111,11 @@ public:
             return EJoinAlgo::SpillingGraceJoin;
         }
 
+        // if only one stream is finished then use Hash Join, cause InMemoryGJ can fail due to memory limits
+        if (leftFetchedTuples == STREAM_NOT_FETCHED || rightFetchedTuples == STREAM_NOT_FETCHED) {
+            return EJoinAlgo::HashJoin;
+        }
+
         // If one stream is small enough then use Hash Join
         if (leftFetchedTuples <= TuplesCountTreshold_ || rightFetchedTuples <= TuplesCountTreshold_) {
             return EJoinAlgo::HashJoin;
@@ -120,10 +125,10 @@ public:
     }
 
 private:
-    size_t InMemoryGraceJoinPayloadThreshold_{32}; // bytes
+    size_t InMemoryGraceJoinPayloadThreshold_{24}; // bytes
     size_t InMemoryGraceJoinRatioThreshold_{7}; // 1/7 means output size ~= 15% of larger input size. Also take into account that cardinality estimation often less than truth cardinality
 
-    size_t HashJoinPayloadThreshold_{16};
+    size_t HashJoinPayloadThreshold_{32};
     size_t HashJoinRatioThreshold_{7};
 
     size_t TuplesCountTreshold_{100'000}; // treshold to decide what algoritm to choose
