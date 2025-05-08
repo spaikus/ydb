@@ -235,9 +235,7 @@ public:
 
         // TODO: change this values to stream sizes given from optimizer
         auto [lTuples, rTuples] = GetFetchedTuples();
-        // Another weird heuristic to get number of buckets for cardinality estimation
-        auto buckets = max<ui64>(max<ui64>(lTuples, rTuples) / 2000, 1); // 1/20 (5%) * 1/100 (step) -> 1/2000
-        NPackedTuple::CardinalityEstimator estimator{buckets};
+        NPackedTuple::CardinalityEstimator estimator{16};
         return estimator.Estimate(lTuples, LeftSamples_, rTuples, RightSamples_);
     }
 
@@ -674,6 +672,7 @@ public:
 
         auto& tempStorage = *static_cast<TTempJoinStorage*>(tempStorageValue.AsBoxed().Get());
         auto [leftFetchedTuples, rightFetchedTuples] = tempStorage.GetFetchedTuples();
+        auto maxFetchedTuples = std::max(leftFetchedTuples, rightFetchedTuples);
         auto [leftPSz, rightPSz] = tempStorage.GetPayloadSizes();
         auto cardinality = tempStorage.EstimateCardinality(); // bootstrap value, may be far from truth
         auto [isLeftFinished, isRightFinished] = tempStorage.IsFinished();
@@ -698,7 +697,7 @@ public:
         BuildKeyColumnsSet_ = THashSet<ui32>(BuildKeyColumns_->begin(), BuildKeyColumns_->end());
         // Use or not external payload depends on the policy
         IsBuildIndirected_ = policy->UseExternalPayload(
-            EJoinAlgo::HashJoin, leftPSz, leftFetchedTuples / cardinality);
+            EJoinAlgo::HashJoin, leftPSz, maxFetchedTuples / cardinality);
 
         ProbeStream_ = *rightStream;
         ProbeData_ = std::move(rightData);
@@ -707,7 +706,7 @@ public:
         ProbeKeyColumnsSet_ = THashSet<ui32>(ProbeKeyColumns_->begin(), ProbeKeyColumns_->end());
         // Use or not external payload depends on the policy
         IsProbeIndirected_ = policy->UseExternalPayload(
-            EJoinAlgo::HashJoin, rightPSz, rightFetchedTuples / cardinality);
+            EJoinAlgo::HashJoin, rightPSz, maxFetchedTuples / cardinality);
 
         // Create converters
         TVector<TType*> leftItemTypes;
@@ -1459,6 +1458,7 @@ public:
 
         auto& tempStorage = *static_cast<TTempJoinStorage*>(tempStorageValue.AsBoxed().Get());
         auto [leftFetchedTuples, rightFetchedTuples] = tempStorage.GetFetchedTuples();
+        auto maxFetchedTuples = std::max(leftFetchedTuples, rightFetchedTuples);
         auto [leftPSz, rightPSz] = tempStorage.GetPayloadSizes();
         auto cardinality = tempStorage.EstimateCardinality(); // bootstrap value, may be far from truth
         auto [leftData, rightData] = tempStorage.DetachData();
@@ -1472,7 +1472,7 @@ public:
         // Use or not external payload depends on the policy
         /// TODO: support indexed payload, currently it is ignored
         leftSide.IsIndirected = policy->UseExternalPayload(
-            EJoinAlgo::HashJoin, leftPSz, leftFetchedTuples / cardinality);
+            EJoinAlgo::HashJoin, leftPSz, maxFetchedTuples / cardinality);
 
         auto& rightSide = JoinSides_[kRightSide];
         rightSide.Stream = *rightStream;
@@ -1480,7 +1480,7 @@ public:
         auto rightKeyColumnsSet = THashSet<ui32>(rightKeyColumns->begin(), rightKeyColumns->end());
         // Use or not external payload depends on the policy
         rightSide.IsIndirected = policy->UseExternalPayload(
-            EJoinAlgo::HashJoin, rightPSz, rightFetchedTuples / cardinality);
+            EJoinAlgo::HashJoin, rightPSz, maxFetchedTuples / cardinality);
 
         // Create converters
         TVector<TType*> leftItemTypes;
