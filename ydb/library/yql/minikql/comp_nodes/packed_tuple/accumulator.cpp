@@ -99,8 +99,8 @@ void TAccumulatorImpl::AddData(const ui8* data, const ui8* overflow, ui32 nItems
         NYql::PrefetchForRead(tuple + layoutTotalRowSize * 32);
 
         ui8* ptStoreAddr = PackedTupleBuckets_[bucketId].data() + PackedTupleBucketSizes_[bucketId];
-        NYql::PrefetchForWrite(ptStoreAddr + layoutTotalRowSize);
         ui8* ovStoreAddr = OverflowBuckets_[bucketId].data() + OverflowBucketSizes_[bucketId];
+        NYql::PrefetchForWrite(ptStoreAddr + layoutTotalRowSize);
 
         Layout_->TupleDeepCopy(tuple, overflow, ptStoreAddr, ovStoreAddr, OverflowBucketSizes_[bucketId]);
         PackedTupleBucketSizes_[bucketId] += layoutTotalRowSize;
@@ -128,6 +128,9 @@ void TAccumulatorImpl::Detach(std::vector<TBucket, TMKQLAllocator<TBucket>>& buc
 }
 
 // -----------------------------------------------------------------------
+
+static constexpr size_t kSMBSize = 2 * 1024 * 1024;
+
 TSMBAccumulatorImpl::TSMBAccumulatorImpl(const TTupleLayout* layout, ui32 bitShift, ui32 log2Buckets)
     : NBuckets_(1 << log2Buckets)
     , Layout_(layout)
@@ -135,14 +138,14 @@ TSMBAccumulatorImpl::TSMBAccumulatorImpl(const TTupleLayout* layout, ui32 bitShi
     , OverflowBucketSizes_(NBuckets_, 0)
     , PackedTupleBuckets_(NBuckets_)
     , OverflowBuckets_(NBuckets_)
-    , PackedTupleSMB_(2 * MB)
-    , OverflowSMB_(2 * MB)
+    , PackedTupleSMB_(kSMBSize)
+    , OverflowSMB_(kSMBSize)
 {
     Shift_ = sizeof(ui32) * 8 - (log2Buckets + bitShift);
     Mask_ = (1u << log2Buckets) - 1;
 
-    std::memset(PackedTupleSMB_.data(), 0, 2 * MB);
-    std::memset(OverflowSMB_.data(), 0, 2 * MB);
+    std::memset(PackedTupleSMB_.data(), 0, kSMBSize);
+    std::memset(OverflowSMB_.data(), 0, kSMBSize);
 }
 
 TSMBAccumulatorImpl::TSMBAccumulatorImpl(
@@ -157,23 +160,22 @@ TSMBAccumulatorImpl::TSMBAccumulatorImpl(
     , NoAllocations_(true)
     , PackedTupleBuckets_(std::move(packedTupleBuckets))
     , OverflowBuckets_(std::move(overflowBuckets))
-    , PackedTupleSMB_(2 * MB + sizeof(ui64) * NBuckets_)
-    , OverflowSMB_(2 * MB)
+    , PackedTupleSMB_(kSMBSize + sizeof(ui64) * NBuckets_)
+    , OverflowSMB_(kSMBSize)
 {
     Shift_ = sizeof(ui32) * 8 - (log2Buckets + bitShift);
     Mask_ = (1u << log2Buckets) - 1;
 
-    std::memset(PackedTupleSMB_.data(), 0, 2 * MB + sizeof(ui64) * NBuckets_);
-    std::memset(OverflowSMB_.data(), 0, 2 * MB);
+    std::memset(PackedTupleSMB_.data(), 0, kSMBSize + sizeof(ui64) * NBuckets_);
+    std::memset(OverflowSMB_.data(), 0, kSMBSize);
 }
 
 void TSMBAccumulatorImpl::AddData(const ui8* data, const ui8* overflow, ui32 nItems) {
     const auto layoutTotalRowSize = Layout_->TotalRowSize;
-    const ui64 maxBytesPerPartition = 2 * MB / NBuckets_; // in SMB
+    const ui64 maxBytesPerPartition = kSMBSize / NBuckets_; // in SMB
     const ui64 maxTuplesPerPartition = maxBytesPerPartition / layoutTotalRowSize;
 
     const ui8 hasVarSized = static_cast<ui8>(Layout_->VariableColumns.size() > 0);
-    static const void* dispatch[] = {&&noVarSized, &&varSized}; // accelerate happy path without var sized columns
 
     if (!NoAllocations_) {
         Histogram hist;
@@ -206,24 +208,22 @@ void TSMBAccumulatorImpl::AddData(const ui8* data, const ui8* overflow, ui32 nIt
         }
         ptStoreAddr = ptSmbPartAddr + nPackedTuples * layoutTotalRowSize; // take last packed tuple
 
-        goto *dispatch[hasVarSized]; // accelerate happy path without var sized columns
-
-    // WARNING: do not use SMB with var sized column, because it works slow. Code here is just for demonstration
-    varSized:
-        ovSmbPartAddr = OverflowSMB_.data() + bucketId * maxBytesPerPartition; // take bucket in SMB
-        if (bytesOverflow + Layout_->GetTupleVarSize(tuple) >= maxTuplesPerPartition) {
-            ui8* storeAddr = OverflowBuckets_[bucketId].data() + OverflowBucketSizes_[bucketId];
-            std::memcpy(storeAddr, ovSmbPartAddr, bytesOverflow);
-            OverflowBucketSizes_[bucketId] += bytesOverflow;
-            bytesOverflow = 0;
+        // WARNING: do not use SMB with var sized column, because it works slow. Code here is just for demonstration
+        if (hasVarSized) {
+            ovSmbPartAddr = OverflowSMB_.data() + bucketId * maxBytesPerPartition; // take bucket in SMB
+            if (bytesOverflow + Layout_->GetTupleVarSize(tuple) >= maxTuplesPerPartition) {
+                ui8* storeAddr = OverflowBuckets_[bucketId].data() + OverflowBucketSizes_[bucketId];
+                std::memcpy(storeAddr, ovSmbPartAddr, bytesOverflow);
+                OverflowBucketSizes_[bucketId] += bytesOverflow;
+                bytesOverflow = 0;
+            }
+            ovStoreAddr = ovSmbPartAddr + bytesOverflow; // offset
+        } else {
+            nPackedTuples++;
+            NYql::PrefetchForWrite(ptSmbPartAddr + nPackedTuples * layoutTotalRowSize);
+            Layout_->TupleDeepCopy(tuple, overflow, ptStoreAddr, ovStoreAddr, bytesOverflow);
+            WriteUnaligned<ui64>(ptSmbPartAddr - sizeof(ui64), (bytesOverflow << 32) | nPackedTuples);
         }
-        ovStoreAddr = ovSmbPartAddr + bytesOverflow; // offset
-
-    noVarSized:
-        Layout_->TupleDeepCopy(tuple, overflow, ptStoreAddr, ovStoreAddr, bytesOverflow);
-        nPackedTuples++;
-        WriteUnaligned<ui64>(ptSmbPartAddr - sizeof(ui64), (bytesOverflow << 32) | nPackedTuples);
-        NYql::PrefetchForWrite(ptSmbPartAddr + nPackedTuples * layoutTotalRowSize);
     }
 
     // flush remaining data in SMB to buckets

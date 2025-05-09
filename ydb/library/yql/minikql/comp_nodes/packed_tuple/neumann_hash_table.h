@@ -230,8 +230,31 @@ class TNeumannHashTable {
         }
 
         Buffer_.resize(BufferSlotSize_ * nItems);
-        for (ui32 ind = 0; ind != nItems; ++ind) {
-            const ui8 *const row = tuples + Layout_->TotalRowSize * ind;
+
+        constexpr ui32 prefetchInAdvance = 16;
+
+        if constexpr (Prefetch) {
+            for (ui32 ind = 0; ind != std::min(prefetchInAdvance, nItems); ++ind) {
+                const ui8 *row = tuples + Layout_->TotalRowSize * ind;
+                const THash thash = ReadUnaligned<THash>(row);
+                auto &dir = *Directories_[getDirectorySlot(thash)];
+                const ui32 dataSlot = (dir >> TDirectory::kBufferSlotShift) - 1;
+                ui8 *const ptr = Buffer_.data() + BufferSlotSize_ * dataSlot;
+                NYql::PrefetchForWrite(ptr);
+            }
+        }
+
+        const ui8 *row = tuples;
+        for (ui32 ind = 0; ind != nItems; ++ind, row += Layout_->TotalRowSize) {
+            if constexpr (Prefetch) {
+                const ui8 *prow = row + Layout_->TotalRowSize * prefetchInAdvance;
+                const THash thash = ReadUnaligned<THash>(prow);
+                auto &dir = *Directories_[getDirectorySlot(thash)];
+                const ui32 dataSlot = (dir >> TDirectory::kBufferSlotShift) - 1;
+                ui8 *const ptr = Buffer_.data() + BufferSlotSize_ * dataSlot;
+                NYql::PrefetchForWrite(ptr);
+            }
+    
             const THash thash = ReadUnaligned<THash>(row);
 
             auto &dir = *Directories_[getDirectorySlot(thash)];
@@ -268,7 +291,7 @@ class TNeumannHashTable {
 
                     bool checkLeft = true;
                     while (left != right) {
-                        while (left != right && checkLeft && GetRowMatch(left, row, overflow, matchedRow)) {
+                        while (left != right && checkLeft && GetRowMatch(left, row, overflow, &matchedRow)) {
                             ++size;
                             left += BufferSlotSize_;
                         }
@@ -279,7 +302,7 @@ class TNeumannHashTable {
                         }
                         right -= BufferSlotSize_;
 
-                        if (GetRowMatch(right, row, overflow, matchedRow)) {
+                        if (GetRowMatch(right, row, overflow, &matchedRow)) {
                             ui8 buf[kEmbeddedSize];
                             std::memcpy(buf, left, RowIndexSize_);
                             std::memcpy(left, right, RowIndexSize_);
@@ -298,7 +321,7 @@ class TNeumannHashTable {
         }
     }
 
-    const ui8 *NextMatch(TIterator &iter, const ui8 *overflow) const {
+    Y_FORCE_INLINE const ui8 *NextMatch(TIterator &iter, const ui8 *overflow) const {
         const ui8 *result = nullptr;
 
         if constexpr (ConsecutiveDuplicates) {
@@ -309,7 +332,7 @@ class TNeumannHashTable {
             }
         } else {
             for (auto& it = iter.It_; it != iter.End_; it += BufferSlotSize_) { /// allow multiple false calls
-                if (GetRowMatch(it, iter.Row_, overflow, result)) {
+                if (GetRowMatch(it, iter.Row_, overflow, &result)) {
                     it += BufferSlotSize_;
                     break;
                 }
@@ -352,7 +375,7 @@ class TNeumannHashTable {
                 const ui8 *matchedRow;
                 auto size  = ReadUnaligned<ui32>(it + RowIndexSize_);
 
-                if (GetRowMatch(it, row, overflow, matchedRow)) {
+                if (GetRowMatch(it, row, overflow, &matchedRow)) {
                     iter.It_ = it;
                     iter.Len_ = size;
                     break;
@@ -396,9 +419,47 @@ class TNeumannHashTable {
 
     void Apply(const ui8 *const row, const ui8 *const overflow,
                auto &&onMatch) {
-        auto iter = Find(row, overflow);
-        while (auto matched = NextMatch(iter, overflow)) {
-            onMatch(matched);
+        Y_ASSERT(Layout_ != nullptr);
+        Y_ASSERT(!Directories_.empty() && Tuples_ != nullptr);
+
+        const THash &thash = reinterpret_cast<const THash &>(row[0]);
+        const TBloom hashBloomTag = kBloomTags[thash.BloomTagSlot];
+
+        const Hash dirSlot = getDirectorySlot(thash);
+        const TDirectory dir = Directories_[dirSlot];
+        const TBloom dirBloomFilter = dir.BloomFilter;
+
+        if (hashBloomTag & dirBloomFilter) {
+            return;
+        }
+
+        const ui8 *const begin =
+            Buffer_.data() + BufferSlotSize_ * dir.BufferSlot;
+        const ui8 *const end =
+            Buffer_.data() +
+            BufferSlotSize_ * Directories_[dirSlot + 1].BufferSlot;
+
+        const ui8 *matchedRow;
+
+        if constexpr (!ConsecutiveDuplicates) {
+            for (auto it = begin; it != end; it += BufferSlotSize_) {
+                if (GetRowMatch(it, row, overflow, &matchedRow)) {
+                    onMatch(matchedRow);
+                }
+            }
+        } else {
+            ui32 size = 0;
+            for (auto it = begin; it != end; it += size * BufferSlotSize_) {
+                size = ReadUnaligned<ui32>(it + RowIndexSize_);
+                if (!GetRowMatch(it, row, overflow, &matchedRow)) {
+                    continue;
+                }
+
+                for (; size; --size, it += BufferSlotSize_) {
+                    onMatch(it);
+                }
+                break;
+            }
         }
     }
 
@@ -423,7 +484,7 @@ class TNeumannHashTable {
         }
     } 
 
-    bool GetRowMatch(const ui8 *const it, const ui8 *const row, const ui8 *const overflow, const ui8 *&matchedRow) const {
+    bool GetRowMatch(const ui8 *const it, const ui8 *const row, const ui8 *const overflow, const ui8 **matchedRow) const {
         const THash &thash = reinterpret_cast<const THash &>(row[0]);
 
         if (IsInplace_) {
@@ -431,17 +492,17 @@ class TNeumannHashTable {
             if (matchRowHash != *thash) {
                 return false;
             }
-            matchedRow = it;
+            *matchedRow = it;
         } else {
             const auto *const outRow =
                 reinterpret_cast<const TOutplace *>(it);
             if (outRow->Hash != *thash) {
                 return false;
             }
-            matchedRow = Tuples_ + Layout_->TotalRowSize * outRow->Index;
+            *matchedRow = Tuples_ + Layout_->TotalRowSize * outRow->Index;
         }
 
-        if (Layout_->KeysEqual(row, overflow, matchedRow, Overflow_)) {
+        if (Layout_->KeysEqual(row, overflow, *matchedRow, Overflow_)) {
             return true;
         }
         return false;

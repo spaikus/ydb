@@ -104,7 +104,7 @@ public:
 
     void Clear() override;
 
-    const ui8 *NextMatch(TPageHashTable::TIterator &iter, const ui8 *overflow) const;
+    Y_FORCE_INLINE const ui8 *NextMatch(TPageHashTable::TIterator &iter, const ui8 *overflow) const;
     TIterator Find(const ui8 *const row, const ui8 *const overflow) const;
 
     template <size_t Size>

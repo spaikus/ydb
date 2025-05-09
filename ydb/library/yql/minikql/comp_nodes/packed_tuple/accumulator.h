@@ -113,9 +113,6 @@ public:
     void Detach(std::vector<TBucket, TMKQLAllocator<TBucket>>& buckets) override;
 
 private:
-    static constexpr ui64 MB = 1024 * 1024;
-
-private:
     using THugePageBuffer = std::vector<ui8, TMKQLHugeAllocator<ui8>>;
 
 private:

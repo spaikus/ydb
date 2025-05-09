@@ -22,7 +22,7 @@ namespace NPackedTuple {
 
 using namespace std::chrono_literals;
 
-static volatile bool IsVerbose = true;
+static volatile bool IsVerbose = false;
 #define CTEST (IsVerbose ? Cerr : Cnull)
 
 namespace {
@@ -556,7 +556,7 @@ template <size_t Batch, typename... Args> class TBenchmark {
 
             ui64 matches = 0;
             ui32 checksum = 0;
-            result.lookupTime = Measure([&] {
+            result.lookupTime += Measure([&] {
                 ui8 *const end =
                     lookupKeys + Layout_->TotalRowSize * lookupSize;
                 for (ui8 *it = lookupKeys; it != end; it += Layout_->TotalRowSize) {
@@ -573,11 +573,13 @@ template <size_t Batch, typename... Args> class TBenchmark {
             if constexpr (Batch > 1) {
                 matches = 0;
                 checksum = 0;
-                result.batchedLookupTime = Measure([&] {
+                result.batchedLookupTime += Measure([&] {
+                    ui8 *it = lookupKeys;
                     for (size_t batchInd = 0; batchInd < lookupSize; batchInd += Batch) {
                         std::array<const ui8 *, Batch> rows;
                         for (size_t i = 0; i < Batch && batchInd + i < lookupSize; ++i) {
-                            rows[i] = lookupKeys + Layout_->TotalRowSize * (batchInd + i);
+                            rows[i] = it;
+                            it += Layout_->TotalRowSize;
                         }
 
                         std::array<typename Arg::TIterator, Batch> iters =
@@ -647,6 +649,7 @@ template <size_t Batch, typename... Args> class TBenchmark {
 
 // -----------------------------------------------------------------
 
+using TRobinHoodTable = TRobinHoodHashBase<false, false>;
 using TRobinHoodTableSeq = TRobinHoodHashBase<true, false>;
 using TRobinHoodTableSeqPref = TRobinHoodHashBase<true, true>;
 
@@ -664,77 +667,48 @@ using TPageTableAVX2Pref = TPageHashTableImpl<NSimd::TSimdAVX2Traits, true>;
 
 // -----------------------------------------------------------------
 
-using TTablesBenchmark =
-    TBenchmark<0, TRobinHoodTableSeq, TRobinHoodTableSeqPref,
-               TNeumannTable, TNeumannTableSeq, TPageTableSSE>;
-
 template <typename... Args> struct TTablesCase {
     template <size_t Batch> using TBenchmark = TBenchmark<Batch, Args...>;
 };
-using TTablesBatched =
-    TTablesCase<TRobinHoodTableSeqPref, TNeumannTablePref, TNeumannTableSeqPref, TPageTableSSEPref, TPageTableAVX2Pref>;
+using TTablesBenchmark =
+    TTablesCase<TPageTableSSEPref, TRobinHoodTableSeqPref, TNeumannTablePref>;
 
 // -----------------------------------------------------------------
 
 Y_UNIT_TEST_SUITE(HashTablesBenchmark) {
 
+    static constexpr size_t batchSize = 16;
     static constexpr bool toCSV = false;
 
     Y_UNIT_TEST(Uniform) {
-        TUniformDistribution uni1M(0, 999999);
-        TUniformDistribution uni1B(0, 999999999); /// oof, info may take some
+        TUniformDistribution uni1M(0, 1e6 - 1);
+        TRepeatDistribution uni1Mrpt8(uni1M, 8);
+        TUniformDistribution uni10M(0, 10e6 - 1);
+        TUniformDistribution uni200M(0, 200e6 - 1);
 
-        auto benchmark = TTablesBenchmark(4, Name_);
+        auto benchmark = TTablesBenchmark::TBenchmark<batchSize>(4, Name_);
 
         benchmark.Register({"uniform 1M", uni1M, uni1M});
-        // benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
-        // benchmark.Register({"uniform 1B, 1M", uni1B, uni1M});
-        // benchmark.Register({"uniform 1B", uni1B, uni1B});
+        // benchmark.Register({"uniform 10M", uni10M, uni10M});
+        // benchmark.Register({"uniform 10M, 200M", uni10M, uni200M});
 
-        benchmark.Run(toCSV);
-    }
-
-    Y_UNIT_TEST(UniformBatchedOutplace) {
-        TUniformDistribution uni1M(0, 9999999);
-        TRepeatDistribution uni1Mrpt8(uni1M, 8);
-        TUniformDistribution uni10M(0, 9999999);
-        TUniformDistribution uni200M(0, 199999999);
-
-        auto benchmark = TTablesBatched::TBenchmark<16>(4, Name_);
-
-        benchmark.Register({"uniform 1M", uni1Mrpt8, uni1M});
-        benchmark.Register({"uniform 10M", uni10M, uni10M});
-        benchmark.Register({"uniform 10M, 200M", uni10M, uni200M});
-
-        benchmark.Run(toCSV);
+        // benchmark.Run(toCSV);
     }
 
     Y_UNIT_TEST(UniformPayloaded) {
-        TUniformDistribution uni1M(0, 999999);
-        TUniformDistribution uni1B(0, 999999999); /// oof, info may take some
+        TUniformDistribution uni1M(0, 1e6 - 1);
+        TRepeatDistribution uni1Mrpt8(uni1M, 8);
+        TUniformDistribution uni5M(0, 5e6 - 1);
+        TUniformDistribution uni200M(0, 200e6 - 1);
 
-        auto benchmark = TTablesBenchmark(21, Name_);
+        auto benchmark = TTablesBenchmark::TBenchmark<batchSize>(21, Name_);
 
-        benchmark.Register({"uniform 1M", uni1M, uni1M});
+        benchmark.Register({"uniform 1M, 5M", uni1M, uni5M});
         // benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
         // benchmark.Register({"uniform 1B, 1M", uni1B, uni1M});
         // benchmark.Register({"uniform 1B", uni1B, uni1B});
 
-        // benchmark.Run(toCSV);
-    }
-
-    Y_UNIT_TEST(UniformPayloadedBatched) {
-        TUniformDistribution uni1M(0, 999999);
-        TUniformDistribution uni1B(0, 999999999); /// oof, info may take some
-
-        auto benchmark = TTablesBatched::TBenchmark<16>(21, Name_);
-
-        benchmark.Register({"uniform 1M", uni1M, uni1M});
-        // benchmark.Register({"uniform 1M, 1B", uni1M, uni1B});
-        // benchmark.Register({"uniform 1B, 1M", uni1B, uni1M});
-        // benchmark.Register({"uniform 1B", uni1B, uni1B});
-
-        // benchmark.Run(toCSV);
+        benchmark.Run(toCSV);
     }
 
     Y_UNIT_TEST(NormalPayloaded) {
@@ -742,7 +716,7 @@ Y_UNIT_TEST_SUITE(HashTablesBenchmark) {
         TNormalDistribution norm1B(1000000000 / 2,
                                    1000000000 / 6); /// oof, info may take some
 
-        auto benchmark = TTablesBenchmark(21, Name_);
+        auto benchmark = TTablesBenchmark::TBenchmark<batchSize>(21, Name_);
 
         benchmark.Register({"norm 1M", norm1M, norm1M});
         // benchmark.Register({"norm 1M, 1B", norm1M, norm1B});
@@ -757,7 +731,7 @@ Y_UNIT_TEST_SUITE(HashTablesBenchmark) {
         TUniformDistribution uni1M(0, 999999);
         TMixtureDistribution mixSingleUni1B(single, uni1M, 0.1);
 
-        auto benchmark = TTablesBenchmark(21, Name_);
+        auto benchmark = TTablesBenchmark::TBenchmark<batchSize>(21, Name_);
 
         benchmark.Register({"uniform 1M, mix", uni1M, mixSingleUni1B});
         benchmark.Register({"mix, uniform 1M", mixSingleUni1B, uni1M});

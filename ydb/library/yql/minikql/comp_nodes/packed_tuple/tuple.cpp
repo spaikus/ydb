@@ -11,6 +11,8 @@
 #include <util/generic/bitops.h>
 #include <util/generic/buffer.h>
 
+#include <arrow/util/bit_util.h>
+
 #include "hashes_calc.h"
 #include "packing.h"
 
@@ -301,28 +303,13 @@ TTupleLayoutFallback::TTupleLayoutFallback(
 
     KeyColumnsSize = KeyColumnsEnd - KeyColumnsOffset;
 
-    switch (KeyColumnsSize) {
-    case 1:
-        KeySizeTag_ = 0;
-        break;
-    case 2:
-        KeySizeTag_ = 1;
-        break;
-    case 4:
-        KeySizeTag_ = 2;
-        break;
-    case 8:
-        KeySizeTag_ = 3;
-        break;
-    case 16:
-        KeySizeTag_ = 4;
-        break;
-    default:
-        KeySizeTag_ = 5;
-    }
     /// if layout contains varsize keys or null byte of 8 cols is not enough
-    if (KeyColumnsFixedNum != KeyColumnsNum || KeyColumnsNum > 8) {
+    if (KeyColumnsFixedNum != KeyColumnsNum || KeyColumnsNum > 8 ||
+        !arrow::BitUtil::IsPowerOf2(uint64_t(KeyColumnsSize)) ||
+        KeyColumnsSize > (1 << 4)) {
         KeySizeTag_ = 5;
+    } else {
+        KeySizeTag_ = arrow::BitUtil::CountTrailingZeros(KeyColumnsSize);
     }
 
     BitmaskOffset = currOffset;
