@@ -886,39 +886,31 @@ private:
         auto  tuple = joinState.ProbePackedInput.PackedTuples.data();
         auto  nTuples = joinState.ProbePackedInput.NTuples;
         auto  overflow = joinState.ProbePackedInput.Overflow.data();
-
-        constexpr auto batchSize = 16;
         
-    if constexpr (false) { /// ignore batch api switch (test purpose)
-        using TIterPair = std::pair<TTable::TIterator, const ui8*>;
-        TVector<TIterPair> iterators(batchSize);
+    if constexpr (true) {  /// ignore batch api switch (test purpose)
+        for (size_t i = 0; i < nTuples; i++, tuple += probeLayout->TotalRowSize) {
+            /// TODO: deduplicate logic by moving tuples join code into dedicated func
+            auto it = Table_.Find(tuple, overflow);
 
-        for (size_t i = 0; i < nTuples; i += batchSize) {
-            auto remaining = std::min<ui64>(batchSize, nTuples - i);
-            for (size_t offset = 0; offset < remaining; ++offset, tuple += probeLayout->TotalRowSize) {
-                iterators[offset] = {Table_.Find(tuple, overflow), tuple};
-            }
+            const ui8* foundTuple = nullptr;
+            while ((foundTuple = Table_.NextMatch(it, overflow)) != nullptr) {
+                // Copy tuple from build part into output
+                auto prevSize = joinState.BuildPackedOutput.size();
+                joinState.BuildPackedOutput.resize(prevSize + buildLayout->TotalRowSize);
+                std::copy(foundTuple, foundTuple + buildLayout->TotalRowSize, joinState.BuildPackedOutput.data() + prevSize);
 
-            for (size_t offset = 0; offset < remaining; ++offset) {
-                auto [it, inTuple] = iterators[offset];
-                const ui8* foundTuple = nullptr;
-                while ((foundTuple = Table_.NextMatch(it, overflow)) != nullptr) {
-                    // Copy tuple from build part into output
-                    auto prevSize = joinState.BuildPackedOutput.size();
-                    joinState.BuildPackedOutput.resize(prevSize + buildLayout->TotalRowSize);
-                    std::copy(foundTuple, foundTuple + buildLayout->TotalRowSize, joinState.BuildPackedOutput.data() + prevSize);
+                // Copy tuple from probe part into output
+                prevSize = joinState.ProbePackedOutput.size();
+                joinState.ProbePackedOutput.resize(prevSize + probeLayout->TotalRowSize);
+                std::copy(tuple, tuple + probeLayout->TotalRowSize, joinState.ProbePackedOutput.data() + prevSize);
 
-                    // Copy tuple from probe part into output
-                    prevSize = joinState.ProbePackedOutput.size();
-                    joinState.ProbePackedOutput.resize(prevSize + probeLayout->TotalRowSize);
-                    std::copy(inTuple, inTuple + probeLayout->TotalRowSize, joinState.ProbePackedOutput.data() + prevSize);
-
-                    // New row added
-                    joinState.OutputRows++;
-                }
+                // New row added
+                joinState.OutputRows++;
             }
         }
     } else {
+        constexpr auto batchSize = 16;
+
         for (size_t i = 0; i < nTuples; i += batchSize) {
             auto remaining = std::min<ui64>(batchSize, nTuples - i);
 
@@ -1198,21 +1190,10 @@ private:
         auto *const overflow = joinState.ProbePackedInput.Overflow.data();
         auto *tuple = joinState.ProbePackedInput.PackedTuples.data() + CurrProbeRow_ * probeLayout->TotalRowSize;
 
-        using TIterPair = std::pair<TTable::TIterator, const ui8*>;
-        constexpr auto batchSize = 16;
-        TVector<TIterPair> iterators(batchSize);
+        if constexpr (true) {  /// ignore batch api switch (test purpose)
+            for (; CurrProbeRow_ < nTuples && joinState.IsNotFull(); CurrProbeRow_++, tuple += probeLayout->TotalRowSize) {
+                auto it = Table_.Find(tuple, overflow);
 
-        // TODO: interrupt this loop when joinState is full as in BlockMapJoin. So track current iterator and save iterators somewhere.
-        // WARNING: we can not properly track the number of output rows due to uninterruptible for loop in DoBatchLookup,
-        // so add joinState.IsNotFull() check to prevent overflow in AddMany builder's method.
-        for (; CurrProbeRow_ < nTuples && joinState.IsNotFull(); CurrProbeRow_ += batchSize) {
-            auto remaining = std::min<ui64>(batchSize, nTuples - CurrProbeRow_);
-            for (size_t offset = 0; offset < remaining; ++offset, tuple += probeLayout->TotalRowSize) {
-                iterators[offset] = {Table_.Find(tuple, overflow), tuple};
-            }
-
-            for (size_t offset = 0; offset < remaining; ++offset) {
-                auto [it, inTuple] = iterators[offset];
                 const ui8* foundTuple = nullptr;
                 while ((foundTuple = Table_.NextMatch(it, overflow)) != nullptr) {
                     // Copy tuple from build part into output
@@ -1223,10 +1204,43 @@ private:
                     // Copy tuple from probe part into output
                     prevSize = joinState.ProbePackedOutput.size();
                     joinState.ProbePackedOutput.resize(prevSize + probeLayout->TotalRowSize);
-                    std::copy(inTuple, inTuple + probeLayout->TotalRowSize, joinState.ProbePackedOutput.data() + prevSize);
+                    std::copy(tuple, tuple + probeLayout->TotalRowSize, joinState.ProbePackedOutput.data() + prevSize);
 
                     // New row added
                     joinState.OutputRows++;
+                }
+            }
+        } else {
+            using TIterPair = std::pair<TTable::TIterator, const ui8*>;
+            constexpr auto batchSize = 16;
+            TVector<TIterPair> iterators(batchSize);
+
+            // TODO: interrupt this loop when joinState is full as in BlockMapJoin. So track current iterator and save iterators somewhere.
+            // WARNING: we can not properly track the number of output rows due to uninterruptible for loop in DoBatchLookup,
+            // so add joinState.IsNotFull() check to prevent overflow in AddMany builder's method.
+            for (; CurrProbeRow_ < nTuples && joinState.IsNotFull(); CurrProbeRow_ += batchSize) {
+                auto remaining = std::min<ui64>(batchSize, nTuples - CurrProbeRow_);
+                for (size_t offset = 0; offset < remaining; ++offset, tuple += probeLayout->TotalRowSize) {
+                    iterators[offset] = {Table_.Find(tuple, overflow), tuple};
+                }
+
+                for (size_t offset = 0; offset < remaining; ++offset) {
+                    auto [it, inTuple] = iterators[offset];
+                    const ui8* foundTuple = nullptr;
+                    while ((foundTuple = Table_.NextMatch(it, overflow)) != nullptr) {
+                        // Copy tuple from build part into output
+                        auto prevSize = joinState.BuildPackedOutput.size();
+                        joinState.BuildPackedOutput.resize(prevSize + buildLayout->TotalRowSize);
+                        std::copy(foundTuple, foundTuple + buildLayout->TotalRowSize, joinState.BuildPackedOutput.data() + prevSize);
+
+                        // Copy tuple from probe part into output
+                        prevSize = joinState.ProbePackedOutput.size();
+                        joinState.ProbePackedOutput.resize(prevSize + probeLayout->TotalRowSize);
+                        std::copy(inTuple, inTuple + probeLayout->TotalRowSize, joinState.ProbePackedOutput.data() + prevSize);
+
+                        // New row added
+                        joinState.OutputRows++;
+                    }
                 }
             }
         }
