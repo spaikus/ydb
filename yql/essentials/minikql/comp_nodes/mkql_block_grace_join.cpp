@@ -1046,8 +1046,6 @@ public:
         const size_t leftOverflowSizeEst = CalculateExpectedOverflowSize(LeftConverter_->GetTupleLayout(), leftRowsNum >> BucketsLogNum_);
         const size_t rightOverflowSizeEst = CalculateExpectedOverflowSize(RightConverter_->GetTupleLayout(), rightRowsNum >> BucketsLogNum_);
         for (ui32 bucket = 0; bucket < (1u << BucketsLogNum_); ++bucket) {
-            LeftBuckets_[bucket].PackedTuples.reserve(bucketDesiredSize);
-            RightBuckets_[bucket].PackedTuples.reserve(bucketDesiredSize);
             LeftBuckets_[bucket].Overflow.reserve(leftOverflowSizeEst);
             RightBuckets_[bucket].Overflow.reserve(rightOverflowSizeEst);
         }

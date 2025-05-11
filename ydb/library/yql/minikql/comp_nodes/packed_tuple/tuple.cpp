@@ -1338,16 +1338,16 @@ void TTupleLayoutSIMD<TTraits>::BucketPack(
     TPaddedPtr<std::vector<ui8, TMKQLAllocator<ui8>>> reses,
     TPaddedPtr<std::vector<ui8, TMKQLAllocator<ui8>>> overflows, ui32 start,
     ui32 count, ui32 bucketsLogNum) const {
-    // if (bucketsLogNum == 0) {
-    //     auto& bres = reses[0];
-    //     const auto size = bres.size();
+    if (bucketsLogNum == 0) {
+        auto& bres = reses[0];
+        const auto size = bres.size();
 
-    //     bres.resize(size + count * TotalRowSize);
-    //     auto* const res = bres.data() + size;
+        bres.resize(size + count * TotalRowSize);
+        auto* const res = bres.data() + size;
 
-    //     Pack(columns, isValidBitmask, res, overflows[0], start, count);
-    //     return;
-    // }
+        Pack(columns, isValidBitmask, res, overflows[0], start, count);
+        return;
+    }
 
     std::vector<ui8> resbuf(BlockRows_ * TotalRowSize);
     ui8 *const res = resbuf.data();
@@ -1499,7 +1499,7 @@ void TTupleLayoutSIMD<TTraits>::BucketPack(
             WriteUnaligned<ui32>(res, hash);
 
             /// most-significant bits of hash
-            const auto bucket = bucketsLogNum ? hash >> (sizeof(hash) * 8 - bucketsLogNum) : 0;
+            const auto bucket = hash >> (sizeof(hash) * 8 - bucketsLogNum);
 
             auto& overflow = overflows[bucket];
 
