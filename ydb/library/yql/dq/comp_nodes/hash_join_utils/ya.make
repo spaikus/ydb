@@ -13,6 +13,7 @@ IF (ARCH_X86_64)
 
 SRCS(
     tuple.cpp
+    accumulator.cpp
 )
 
 CFLAGS(
